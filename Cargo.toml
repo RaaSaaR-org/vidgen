@@ -1,0 +1,37 @@
+[package]
+name = "vidgen"
+version = "0.1.0"
+edition = "2021"
+description = "AI-agent-first video production CLI — render HTML/CSS scenes via headless Chromium + FFmpeg"
+license = "MIT"
+
+[[bin]]
+name = "vidgen"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+colored = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yml = "0.0.12"
+toml = "0.8"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs"] }
+handlebars = "6"
+chromiumoxide = { version = "0.8", features = ["tokio-runtime"], default-features = false }
+ffmpeg-sidecar = "2.0"
+tempfile = "3"
+futures = "0.3"
+rmcp = { version = "0.14", features = ["server", "transport-io"] }
+schemars = "1"
+base64 = "0.22"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+notify-debouncer-mini = "0.5"
+notify = "7"
+ureq = "3"
+dotenvy = "0.15"
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"

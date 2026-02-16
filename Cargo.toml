@@ -1,6 +1,6 @@
 [package]
 name = "vidgen"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "AI-agent-first video production CLI — render HTML/CSS scenes via headless Chromium + FFmpeg"
 license = "MIT"

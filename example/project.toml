@@ -1,0 +1,26 @@
+[project]
+name = "Introducing vidgen"
+
+[video]
+fps = 30
+width = 1920
+height = 1080
+default_transition = "fade"
+default_transition_duration = 0.5
+
+[voice]
+engine = "native"
+padding_before = 0.5
+padding_after = 0.5
+
+[theme]
+primary = "#6366F1"
+secondary = "#A78BFA"
+background = "#0F172A"
+text = "#F1F5F9"
+font_heading = "Inter"
+font_body = "Inter"
+
+[output]
+directory = "./output"
+quality = "standard"

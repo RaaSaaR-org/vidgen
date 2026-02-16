@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --frame: {{frame}};
+    --total-frames: {{total_frames}};
+    --progress: calc(var(--frame) / var(--total-frames));
+  }
+
+  body {
+    width: {{width}}px;
+    height: {{height}}px;
+    overflow: hidden;
+    background: {{effective_background}};
+    color: {{theme_text}};
+    font-family: '{{theme_font_body}}', system-ui, -apple-system, sans-serif;
+  }
+
+  .scene-container {
+    container-type: size;
+    width: 100%;
+    height: 100%;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    width: 100%;
+    height: 100%;
+    gap: 4px;
+  }
+
+  /* Layout variants */
+  .grid.layout-33-67 { grid-template-columns: 1fr 2fr; }
+  .grid.layout-67-33 { grid-template-columns: 2fr 1fr; }
+  .grid.layout-grid { grid-template-columns: repeat(2, 1fr); grid-auto-rows: 1fr; }
+
+  /* Portrait: stack vertically */
+  @container (aspect-ratio < 1) {
+    .grid, .grid.layout-33-67, .grid.layout-67-33, .grid.layout-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 8%;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* Alternate panel backgrounds for contrast */
+  .panel:nth-child(odd) {
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .panel:nth-child(even) {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .panel-label {
+    font-size: clamp(1.8rem, 3vw, 3.5rem);
+    font-weight: 700;
+    font-family: '{{theme_font_heading}}', system-ui, -apple-system, sans-serif;
+    margin-bottom: 1rem;
+    color: {{theme_primary}};
+  }
+
+  .panel-content {
+    font-size: clamp(1rem, 1.6vw, 1.6rem);
+    line-height: 1.6;
+    font-weight: 400;
+  }
+
+  .panel-divider {
+    width: 50px;
+    height: 3px;
+    background: {{theme_primary}};
+    margin: 1rem auto;
+    border-radius: 2px;
+    opacity: 0.6;
+  }
+
+  @container (aspect-ratio < 1) {
+    .panel-label {
+      font-size: clamp(1.5rem, 5vw, 3rem);
+    }
+    .panel-content {
+      font-size: clamp(1rem, 3vw, 1.8rem);
+    }
+  }
+</style>
+</head>
+<body>
+  <div class="scene-container">
+    <div class="grid {{#if layout}}layout-{{layout}}{{/if}}">
+      {{#each panels}}
+      <div class="panel" style="--panel-index: {{@index}}; opacity: clamp(0, calc((var(--progress) - var(--panel-index) * 0.12) * 5), 1); transform: translateY(calc((1 - clamp(0, calc((var(--progress) - var(--panel-index) * 0.12) * 5), 1)) * 40px));">
+        <div class="panel-label">{{this.label}}</div>
+        <div class="panel-divider"></div>
+        <div class="panel-content">{{this.content}}</div>
+      </div>
+      {{/each}}
+    </div>
+  </div>
+</body>
+</html>

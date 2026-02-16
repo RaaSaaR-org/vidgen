@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --frame: {{frame}};
+    --total-frames: {{total_frames}};
+    --progress: calc(var(--frame) / var(--total-frames));
+    --total-slides: {{total_slides}};
+    --slide-duration: calc(1.0 / var(--total-slides));
+  }
+
+  body {
+    width: {{width}}px;
+    height: {{height}}px;
+    overflow: hidden;
+    background: {{effective_background}};
+    color: {{theme_text}};
+    font-family: '{{theme_font_body}}', system-ui, -apple-system, sans-serif;
+    position: relative;
+  }
+
+  .scene-container {
+    container-type: size;
+    width: 100%;
+    height: 100%;
+    position: relative;
+  }
+
+  .slide {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 8% 10%;
+    text-align: center;
+    /* Cross-fade: each slide fades in at its time slice, holds, then fades out */
+    opacity: clamp(0,
+      min(
+        calc((var(--progress) - var(--slide-start)) / 0.08),
+        calc((var(--slide-end) - var(--progress)) / 0.08)
+      ),
+      1);
+  }
+
+  .slide-image {
+    max-width: 60%;
+    max-height: 40%;
+    object-fit: contain;
+    margin-bottom: 2rem;
+    border-radius: 8px;
+  }
+
+  .slide-heading {
+    font-size: clamp(2rem, 4vw, 4.5rem);
+    font-weight: 700;
+    font-family: '{{theme_font_heading}}', system-ui, -apple-system, sans-serif;
+    margin-bottom: 1rem;
+    color: {{theme_primary}};
+  }
+
+  .slide-body {
+    font-size: clamp(1rem, 1.8vw, 1.8rem);
+    line-height: 1.6;
+    font-weight: 400;
+    max-width: 80%;
+  }
+
+  /* Progress indicator dots */
+  .dots {
+    position: absolute;
+    bottom: 5%;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 12px;
+  }
+
+  .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: {{theme_text}};
+    opacity: 0.25;
+  }
+
+  /* Active dot: highlight when progress falls within this dot's slide range */
+  .dot-active {
+    opacity: 0.9;
+    background: {{theme_primary}};
+  }
+
+  @container (aspect-ratio < 1) {
+    .slide-heading {
+      font-size: clamp(2rem, 7vw, 4rem);
+    }
+    .slide-body {
+      font-size: clamp(1rem, 4vw, 2rem);
+      max-width: 90%;
+    }
+    .slide {
+      padding: 8%;
+    }
+  }
+</style>
+</head>
+<body>
+  <div class="scene-container">
+    {{#each slides}}
+    <div class="slide" style="--slide-index: {{this.index}}; --slide-start: calc({{this.index}} / {{../total_slides}}); --slide-end: calc(({{this.index}} + 1) / {{../total_slides}});">
+      {{#if this.image}}<img class="slide-image" src="{{this.image}}" alt="">{{/if}}
+      {{#if this.heading}}<div class="slide-heading">{{this.heading}}</div>{{/if}}
+      {{#if this.body}}<div class="slide-body">{{this.body}}</div>{{/if}}
+    </div>
+    {{/each}}
+
+    <div class="dots">
+      {{#each slides}}
+      <div class="dot{{#if this.active}} dot-active{{/if}}"></div>
+      {{/each}}
+    </div>
+  </div>
+</body>
+</html>

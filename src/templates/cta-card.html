@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --frame: {{frame}};
+    --total-frames: {{total_frames}};
+    --progress: calc(var(--frame) / var(--total-frames));
+  }
+
+  body {
+    width: {{width}}px;
+    height: {{height}}px;
+    overflow: hidden;
+    background: {{effective_background}};
+    color: {{theme_text}};
+    font-family: '{{theme_font_heading}}', system-ui, -apple-system, sans-serif;
+  }
+
+  .scene-container {
+    container-type: size;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .container {
+    text-align: center;
+    padding: 0 10%;
+    max-width: 100%;
+  }
+
+  .heading {
+    font-size: clamp(2.5rem, 4.5vw, 5rem);
+    font-weight: 800;
+    line-height: 1.1;
+    margin-bottom: 1.5rem;
+    /* Fade up: 0% → 15% progress */
+    opacity: clamp(0, calc(var(--progress) * (1 / 0.15)), 1);
+    transform: translateY(calc((1 - clamp(0, calc(var(--progress) * (1 / 0.15)), 1)) * 40px));
+  }
+
+  .accent-line {
+    width: 100px;
+    height: 4px;
+    background: {{theme_primary}};
+    margin: 0 auto 1.5rem;
+    border-radius: 2px;
+    /* Scale in: 10% → 25% progress */
+    transform: scaleX(clamp(0, calc((var(--progress) - 0.1) * (1 / 0.15)), 1));
+  }
+
+  .subheading {
+    font-size: clamp(1.2rem, 2vw, 2rem);
+    font-weight: 400;
+    font-family: '{{theme_font_body}}', system-ui, -apple-system, sans-serif;
+    margin-bottom: 2.5rem;
+    /* Fade in: 15% → 30% progress */
+    opacity: clamp(0, calc((var(--progress) - 0.15) * (1 / 0.15)), 0.8);
+  }
+
+  .items {
+    list-style: none;
+    text-align: left;
+    display: inline-block;
+  }
+
+  .item {
+    font-size: clamp(1.1rem, 1.8vw, 1.8rem);
+    font-weight: 500;
+    font-family: '{{theme_font_body}}', system-ui, -apple-system, sans-serif;
+    line-height: 2.2;
+    padding-left: 1.5em;
+    position: relative;
+  }
+
+  .item::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: {{theme_primary}};
+  }
+
+  @container (aspect-ratio < 1) {
+    .heading {
+      font-size: clamp(2rem, 7vw, 4rem);
+    }
+    .subheading {
+      font-size: clamp(1.2rem, 4vw, 2rem);
+    }
+    .item {
+      font-size: clamp(1.1rem, 3.5vw, 2rem);
+    }
+    .container {
+      padding: 0 8%;
+    }
+  }
+</style>
+</head>
+<body>
+  <div class="scene-container">
+    <div class="container">
+      <h1 class="heading">{{heading}}</h1>
+      <div class="accent-line"></div>
+      {{#if subheading}}
+      <p class="subheading">{{subheading}}</p>
+      {{/if}}
+      {{#if items}}
+      <ul class="items">
+        {{#each items}}
+        <li class="item" style="--item-index: {{@index}}; opacity: clamp(0, calc((var(--progress) - 0.25 - {{@index}} * 0.08) * 8), 1); transform: translateX(calc((1 - clamp(0, calc((var(--progress) - 0.25 - {{@index}} * 0.08) * 8), 1)) * 30px));">{{this}}</li>
+        {{/each}}
+      </ul>
+      {{/if}}
+      {{#if qr_code_url}}
+      <div class="qr-code" style="margin-top: 2rem; opacity: clamp(0, calc((var(--progress) - 0.5) * 5), 1);">
+        <img src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&amp;data={{qr_code_url}}" alt="QR Code" width="150" height="150" style="border-radius: 8px;">
+      </div>
+      {{/if}}
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --frame: {{frame}};
+    --total-frames: {{total_frames}};
+    --progress: calc(var(--frame) / var(--total-frames));
+    --total-words: {{total_words}};
+  }
+
+  body {
+    width: {{width}}px;
+    height: {{height}}px;
+    overflow: hidden;
+    background: {{effective_background}};
+    color: {{theme_text}};
+    font-family: '{{theme_font_heading}}', system-ui, -apple-system, sans-serif;
+  }
+
+  .scene-container {
+    container-type: size;
+    width: 100%;
+    height: 100%;
+    position: relative;
+  }
+
+  .caption-area {
+    position: absolute;
+    left: 5%;
+    right: 5%;
+    text-align: center;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+  }
+
+  /* Position variants */
+  .caption-area.bottom {
+    bottom: 10%;
+  }
+
+  .caption-area.top {
+    top: 10%;
+  }
+
+  .caption-area.center {
+    top: 50%;
+    transform: translateY(-50%);
+  }
+
+  .caption-word {
+    font-size: clamp(2rem, 3.5vw, 4rem);
+    font-weight: 700;
+    line-height: 1.4;
+    display: inline-block;
+    /* Reveal variable: 0 when hidden, 1 when visible */
+    --reveal: clamp(0, calc(var(--progress) * var(--total-words) - var(--word-index)), 1);
+    opacity: var(--reveal);
+    /* Collapse hidden words to zero width */
+    max-width: calc(var(--reveal) * 600px);
+    overflow: hidden;
+    white-space: nowrap;
+    /* Word spacing only when revealed */
+    margin: 0 calc(var(--reveal) * 0.2em);
+  }
+
+  /* Style: outline — text with dark outline for readability */
+  .style-outline .caption-word {
+    text-shadow:
+      -2px -2px 0 rgba(0, 0, 0, 0.8),
+       2px -2px 0 rgba(0, 0, 0, 0.8),
+      -2px  2px 0 rgba(0, 0, 0, 0.8),
+       2px  2px 0 rgba(0, 0, 0, 0.8);
+  }
+
+  /* Style: background-box — text on semi-transparent background */
+  .style-background-box .caption-word {
+    background: rgba(0, 0, 0, 0.7);
+    padding: 0.1em 0.3em;
+    border-radius: 4px;
+  }
+
+  /* Style: drop-shadow — subtle drop shadow behind text */
+  .style-drop-shadow .caption-word {
+    text-shadow: 2px 4px 8px rgba(0, 0, 0, 0.6);
+  }
+
+  @container (aspect-ratio < 1) {
+    .caption-word {
+      font-size: clamp(2.5rem, 8vw, 5rem);
+    }
+    .caption-area {
+      left: 4%;
+      right: 4%;
+    }
+    .caption-area.bottom {
+      bottom: 15%;
+    }
+  }
+</style>
+</head>
+<body>
+  <div class="scene-container">
+    <div class="caption-area {{position}} style-{{style}}">
+      {{#each words}}
+      <span class="caption-word" style="--word-index: {{this.index}};">{{this.word}}</span>
+      {{/each}}
+    </div>
+  </div>
+</body>
+</html>

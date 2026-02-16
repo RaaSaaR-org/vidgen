@@ -135,6 +135,24 @@ Platform-specific encoding presets handle codec, bitrate, and file size constrai
 - **Offline by default** — Ships with native/edge TTS; cloud TTS is opt-in
 - **Web-native rendering** — Scenes are HTML/CSS with full CSS animations, SVG, Canvas support
 
+## Examples
+
+The `examples/` directory contains three projects:
+
+| Example | Description |
+|---------|-------------|
+| [`examples/minimal/`](examples/minimal/) | Bare-minimum 2-scene project — the simplest thing that works |
+| [`examples/intro/`](examples/intro/) | 7-scene intro video with multi-format output (landscape, portrait, square) |
+| [`examples/showcase/`](examples/showcase/) | 11 scenes demonstrating every template and feature (subtitles, format overrides, parallel rendering) |
+
+```bash
+# Render the minimal example
+vidgen render examples/minimal/
+
+# Render the showcase in all three formats
+vidgen render examples/showcase/
+```
+
 ## Asset references
 
 - `@assets/...` — resolves to project `assets/` directory

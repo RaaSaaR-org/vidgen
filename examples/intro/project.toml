@@ -3,10 +3,25 @@ name = "Introducing vidgen"
 
 [video]
 fps = 30
-width = 1920
-height = 1080
 default_transition = "fade"
 default_transition_duration = 0.5
+
+[video.formats.landscape]
+width = 1920
+height = 1080
+label = "YouTube"
+platform = "youtube-hd"
+
+[video.formats.portrait]
+width = 1080
+height = 1920
+label = "Reels / TikTok"
+platform = "instagram-reels"
+
+[video.formats.square]
+width = 1080
+height = 1080
+label = "Square"
 
 [voice]
 engine = "native"

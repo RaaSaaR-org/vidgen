@@ -1,0 +1,46 @@
+[project]
+name = "vidgen Feature Showcase"
+
+[video]
+fps = 30
+default_transition = "fade"
+default_transition_duration = 0.5
+parallel_scenes = 2
+
+[video.formats.landscape]
+width = 1920
+height = 1080
+label = "YouTube"
+platform = "youtube-hd"
+
+[video.formats.portrait]
+width = 1080
+height = 1920
+label = "Reels / TikTok"
+platform = "instagram-reels"
+
+[video.formats.square]
+width = 1080
+height = 1080
+label = "Square"
+
+[voice]
+engine = "native"
+padding_before = 0.3
+padding_after = 0.8
+
+[theme]
+primary = "#F97316"
+secondary = "#FB923C"
+background = "#1C1917"
+text = "#FAFAF9"
+font_heading = "Inter"
+font_body = "Inter"
+
+[output]
+directory = "./output"
+quality = "high"
+
+[output.subtitles]
+enabled = true
+max_words_per_line = 5

@@ -4,6 +4,13 @@ version = "0.1.0"
 edition = "2021"
 description = "AI-agent-first video production CLI — render HTML/CSS scenes via headless Chromium + FFmpeg"
 license = "MIT"
+repository = "https://github.com/RaaSaaR-org/vidgen"
+homepage = "https://github.com/RaaSaaR-org/vidgen"
+readme = "README.md"
+keywords = ["video", "cli", "mcp", "tts", "rendering"]
+categories = ["command-line-utilities", "multimedia::video"]
+rust-version = "1.75"
+exclude = ["examples/", "prd.md", ".github/"]
 
 [[bin]]
 name = "vidgen"

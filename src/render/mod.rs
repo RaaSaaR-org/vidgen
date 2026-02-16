@@ -295,6 +295,31 @@ pub async fn render_project(
         }
     }
 
+    // Compute per-scene audio delay and content padding (format-independent)
+    let audio_delays: Vec<f64> = scenes
+        .iter()
+        .enumerate()
+        .map(|(i, scene)| {
+            if scene.frontmatter.duration.is_auto() && tts_durations[i].is_some() {
+                config.voice.padding_before
+            } else {
+                0.0
+            }
+        })
+        .collect();
+
+    let content_paddings_after: Vec<f64> = scenes
+        .iter()
+        .enumerate()
+        .map(|(i, scene)| {
+            if scene.frontmatter.duration.is_auto() && tts_durations[i].is_some() {
+                config.voice.padding_after
+            } else {
+                0.0
+            }
+        })
+        .collect();
+
     // Resolve transitions between adjacent scenes (format-independent)
     let transitions: Vec<Option<SceneTransition>> = if scenes.len() > 1 {
         (0..scenes.len() - 1)
@@ -394,6 +419,8 @@ pub async fn render_project(
         let durations_ref = &effective_durations;
         let prep_ref = &scene_prep;
         let scenes_ref = &fmt_scenes;
+        let audio_delays_ref = &audio_delays;
+        let content_paddings_ref = &content_paddings_after;
 
         // Render scenes concurrently with bounded parallelism
         let scene_results: Vec<_> = stream::iter(0..scenes.len())
@@ -419,6 +446,8 @@ pub async fn render_project(
                     music.as_deref(),
                     music_volume,
                     dur,
+                    audio_delays_ref[i],
+                    content_paddings_ref[i],
                 )
                 .await?;
                 Ok::<_, crate::error::VidgenError>((i, path, dur))
@@ -495,11 +524,15 @@ pub async fn render_project(
             for (i, scene) in scenes.iter().enumerate() {
                 let script = scene.script.trim();
                 if !script.is_empty() && tts_durations[i].is_some() {
-                    let words =
-                        tts::timestamps::estimate_word_timestamps(script, effective_durations[i]);
+                    // Use TTS duration (voice only) instead of effective duration (which includes padding)
+                    let words = tts::timestamps::estimate_word_timestamps(
+                        script,
+                        tts_durations[i].unwrap(),
+                    );
                     for mut w in words {
-                        w.start_secs += scene_offset;
-                        w.end_secs += scene_offset;
+                        // Shift by scene offset + audio delay (padding_before)
+                        w.start_secs += scene_offset + audio_delays[i];
+                        w.end_secs += scene_offset + audio_delays[i];
                         all_words.push(w);
                     }
                 }

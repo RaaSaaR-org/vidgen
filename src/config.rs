@@ -148,7 +148,7 @@ fn default_font() -> String {
     "Inter".into()
 }
 fn default_transition_duration() -> f64 {
-    0.5
+    0.3
 }
 fn default_voice_engine() -> String {
     "native".into()
@@ -602,7 +602,7 @@ fps = 30
 "#;
         let config: ProjectConfig = toml::from_str(toml).unwrap();
         assert!(config.video.default_transition.is_none());
-        assert!((config.video.default_transition_duration - 0.5).abs() < f64::EPSILON);
+        assert!((config.video.default_transition_duration - 0.3).abs() < f64::EPSILON);
     }
 
     #[test]

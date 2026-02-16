@@ -51,8 +51,9 @@ pub async fn capture_single_frame(
     let js = format!(
         "document.documentElement.style.setProperty('--frame', '{}');\
          document.documentElement.style.setProperty('--total-frames', '{}');\
-         document.documentElement.style.setProperty('--progress', '{}');",
-        frame, total_frames, progress
+         document.documentElement.style.setProperty('--progress', '{}');\
+         document.documentElement.style.setProperty('--content-progress', '{}');",
+        frame, total_frames, progress, progress
     );
     page.evaluate(js)
         .await
@@ -118,6 +119,8 @@ pub async fn capture_scene_frames(
     music_path: Option<&Path>,
     music_volume: f64,
     effective_duration: f64,
+    audio_delay_secs: f64,
+    content_padding_after: f64,
 ) -> VidgenResult<std::path::PathBuf> {
     let total_frames = Scene::total_frames_for_duration(effective_duration, fps);
 
@@ -168,6 +171,7 @@ pub async fn capture_scene_frames(
             audio_path,
             music_path,
             music_volume,
+            audio_delay_secs,
             &screenshot,
         )?;
 
@@ -186,7 +190,12 @@ pub async fn capture_scene_frames(
         audio_path,
         music_path,
         music_volume,
+        audio_delay_secs,
     )?;
+
+    // Compute content-progress boundaries (voice window within full scene duration)
+    let content_start_frame = audio_delay_secs * fps as f64;
+    let content_end_frame = (effective_duration - content_padding_after) * fps as f64;
 
     eprintln!(
         "  Scene {}: {} frames ({:.1}s)",
@@ -209,13 +218,21 @@ pub async fn capture_scene_frames(
             .map_err(|e| VidgenError::Browser(format!("Failed to set page content: {e}")))?;
 
         // Inject CSS custom properties via JavaScript for dynamic animation
+        let content_range = content_end_frame - content_start_frame;
+        let content_progress = if content_range > 0.0 {
+            ((frame as f64 - content_start_frame) / content_range).clamp(0.0, 1.0)
+        } else {
+            frame as f64 / total_frames as f64
+        };
         let js = format!(
             "document.documentElement.style.setProperty('--frame', '{}');\
              document.documentElement.style.setProperty('--total-frames', '{}');\
-             document.documentElement.style.setProperty('--progress', '{}');",
+             document.documentElement.style.setProperty('--progress', '{}');\
+             document.documentElement.style.setProperty('--content-progress', '{}');",
             frame,
             total_frames,
-            frame as f64 / total_frames as f64
+            frame as f64 / total_frames as f64,
+            content_progress
         );
         page.evaluate(js)
             .await

@@ -9,6 +9,7 @@
     --frame: {{frame}};
     --total-frames: {{total_frames}};
     --progress: calc(var(--frame) / var(--total-frames));
+    --content-progress: var(--progress);
     --total-words: {{total_words}};
   }
 
@@ -59,8 +60,8 @@
     font-weight: 700;
     line-height: 1.4;
     display: inline-block;
-    /* Reveal variable: 0 when hidden, 1 when visible */
-    --reveal: clamp(0, calc(var(--progress) * var(--total-words) - var(--word-index)), 1);
+    /* Reveal variable: 0 when hidden, 1 when visible — uses content-progress to stay within voice window */
+    --reveal: clamp(0, calc(var(--content-progress) * var(--total-words) - var(--word-index)), 1);
     opacity: var(--reveal);
     /* Collapse hidden words to zero width */
     max-width: calc(var(--reveal) * 600px);

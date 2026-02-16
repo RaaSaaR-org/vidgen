@@ -113,6 +113,7 @@ impl SceneEncoder {
         audio_path: Option<&Path>,
         music_path: Option<&Path>,
         music_volume: f64,
+        audio_delay_secs: f64,
     ) -> VidgenResult<Self> {
         let mut cmd = Command::new("ffmpeg");
         cmd.args([
@@ -154,11 +155,18 @@ impl SceneEncoder {
         ]);
 
         // Audio mixing: voice + music, only voice, only music, or none
+        // When audio_delay_secs > 0, insert an adelay filter to shift the voice track
+        let delay_ms = (audio_delay_secs * 1000.0).round() as u64;
         match (has_voice, has_music) {
             (true, true) => {
                 // Voice is input 1, music is input 2
+                let voice_chain = if delay_ms > 0 {
+                    format!("[1:a]adelay={delay_ms}|{delay_ms},volume=1.0[voice]")
+                } else {
+                    "[1:a]volume=1.0[voice]".to_string()
+                };
                 let filter = format!(
-                    "[1:a]volume=1.0[voice];[2:a]volume={music_volume:.2}[music];\
+                    "{voice_chain};[2:a]volume={music_volume:.2}[music];\
                      [voice][music]amix=inputs=2:duration=first:dropout_transition=2[aout]"
                 );
                 cmd.args(["-filter_complex", &filter, "-map", "0:v", "-map", "[aout]"]);
@@ -172,6 +180,9 @@ impl SceneEncoder {
                 ]);
             }
             (true, false) => {
+                if delay_ms > 0 {
+                    cmd.args(["-af", &format!("adelay={delay_ms}|{delay_ms}")]);
+                }
                 cmd.args([
                     "-c:a",
                     "aac",
@@ -225,6 +236,7 @@ impl SceneEncoder {
         audio_path: Option<&Path>,
         music_path: Option<&Path>,
         music_volume: f64,
+        audio_delay_secs: f64,
         frame_png: &[u8],
     ) -> VidgenResult<PathBuf> {
         // Write the single frame to a temp file
@@ -268,10 +280,16 @@ impl SceneEncoder {
             "+faststart",
         ]);
 
+        let delay_ms = (audio_delay_secs * 1000.0).round() as u64;
         match (has_voice, has_music) {
             (true, true) => {
+                let voice_chain = if delay_ms > 0 {
+                    format!("[1:a]adelay={delay_ms}|{delay_ms},volume=1.0[voice]")
+                } else {
+                    "[1:a]volume=1.0[voice]".to_string()
+                };
                 let filter = format!(
-                    "[1:a]volume=1.0[voice];[2:a]volume={music_volume:.2}[music];\
+                    "{voice_chain};[2:a]volume={music_volume:.2}[music];\
                      [voice][music]amix=inputs=2:duration=first:dropout_transition=2[aout]"
                 );
                 cmd.args(["-filter_complex", &filter, "-map", "0:v", "-map", "[aout]"]);
@@ -285,6 +303,9 @@ impl SceneEncoder {
                 ]);
             }
             (true, false) => {
+                if delay_ms > 0 {
+                    cmd.args(["-af", &format!("adelay={delay_ms}|{delay_ms}")]);
+                }
                 cmd.args([
                     "-c:a",
                     "aac",

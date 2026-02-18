@@ -11,6 +11,7 @@ use crate::template::TemplateRegistry;
 use crate::tts;
 use colored::*;
 use futures::stream::{self, StreamExt};
+use tracing::debug;
 use rmcp::model::ProgressNotificationParam;
 use rmcp::{Peer, RoleServer};
 use serde::Serialize;
@@ -203,6 +204,7 @@ pub async fn render_project(
     let _ = dotenvy::from_path(project_path.join(".env"));
 
     // TTS synthesis pass — runs once (format-independent)
+    debug!("Starting TTS synthesis pass for {} scenes", scenes.len());
     let tts_engine = match tts::create_engine(&config.voice) {
         Ok(engine) => {
             eprintln!(
@@ -266,6 +268,7 @@ pub async fn render_project(
     }
 
     // Duration resolution pass — runs once (format-independent)
+    debug!("Resolving durations for {} scenes", scenes.len());
     let effective_durations: Vec<f64> = scenes
         .iter()
         .enumerate()
@@ -351,6 +354,10 @@ pub async fn render_project(
 
     // Per-format render loop
     for (fmt_idx, (fmt_name, width, height, platform_name)) in formats.iter().enumerate() {
+        debug!(
+            "Rendering format '{}' ({}x{}, platform={:?})",
+            fmt_name, width, height, platform_name
+        );
         let platform = resolve_encoding(&quality, platform_name.as_deref());
 
         eprintln!(

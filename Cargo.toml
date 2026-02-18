@@ -33,6 +33,7 @@ futures = "0.3"
 rmcp = { version = "0.14", features = ["server", "transport-io"] }
 schemars = "1"
 base64 = "0.22"
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 notify-debouncer-mini = "0.5"
 notify = "7"

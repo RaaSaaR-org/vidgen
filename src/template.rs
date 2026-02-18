@@ -4,6 +4,7 @@ use crate::scene::Scene;
 use handlebars::Handlebars;
 use serde_json::json;
 use std::path::Path;
+use tracing::{debug, trace};
 
 const TITLE_CARD_TEMPLATE: &str = include_str!("templates/title-card.html");
 const CONTENT_TEXT_TEMPLATE: &str = include_str!("templates/content-text.html");
@@ -43,6 +44,7 @@ impl<'a> TemplateRegistry<'a> {
         hbs.register_template_string("caption-overlay", CAPTION_OVERLAY_TEMPLATE)
             .map_err(|e| VidgenError::TemplateRender(e.to_string()))?;
 
+        debug!("Template registry initialized with 9 built-in templates");
         Ok(Self { hbs })
     }
 
@@ -58,6 +60,7 @@ impl<'a> TemplateRegistry<'a> {
             let path = entry.path();
             if path.extension().is_some_and(|ext| ext == "html") {
                 if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    debug!("Registering project template: {}", stem);
                     let content = std::fs::read_to_string(&path)?;
                     self.hbs
                         .register_template_string(stem, &content)
@@ -86,6 +89,10 @@ impl<'a> TemplateRegistry<'a> {
         total_frames: u32,
     ) -> VidgenResult<String> {
         let template_name = &scene.frontmatter.template;
+        trace!(
+            "Rendering template '{}' frame {}/{}",
+            template_name, frame, total_frames
+        );
 
         if !self.hbs.has_template(template_name) {
             return Err(VidgenError::TemplateNotFound(template_name.clone()));

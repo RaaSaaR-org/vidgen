@@ -9,6 +9,7 @@ use chromiumoxide::cdp::browser_protocol::emulation::SetDeviceMetricsOverridePar
 use chromiumoxide::page::ScreenshotParams;
 use futures::StreamExt;
 use std::path::Path;
+use tracing::debug;
 
 /// Capture a single frame as PNG bytes. Launches a browser, renders the HTML,
 /// injects CSS custom properties, takes a screenshot, and returns PNG data.
@@ -76,6 +77,7 @@ pub async fn launch_browser(
     width: u32,
     height: u32,
 ) -> VidgenResult<(Browser, tokio::task::JoinHandle<()>)> {
+    debug!("Launching headless browser ({}x{})", width, height);
     let config = BrowserConfig::builder()
         .window_size(width, height)
         .viewport(None) // We'll set viewport per-page via CDP
@@ -123,6 +125,10 @@ pub async fn capture_scene_frames(
     content_padding_after: f64,
 ) -> VidgenResult<std::path::PathBuf> {
     let total_frames = Scene::total_frames_for_duration(effective_duration, fps);
+    debug!(
+        "capture_scene_frames: scene={}, frames={}, static=pending, duration={:.1}s",
+        scene_index, total_frames, effective_duration
+    );
 
     // Create a new page (tab) for this scene
     let page = browser
@@ -145,7 +151,9 @@ pub async fn capture_scene_frames(
     let is_static = frame_cache::is_static_scene(&html_frame0);
 
     if is_static {
-        // Static scene: capture one frame, loop it with FFmpeg
+        // Static scene: capture one frame, pipe it N times to the encoder.
+        // This avoids FFmpeg's `-loop 1` flag which hangs on Apple Silicon
+        // when combined with a finite audio input.
         eprintln!(
             "  Scene {}: static, 1 frame captured ({:.1}s)",
             scene_index + 1,
@@ -161,19 +169,14 @@ pub async fn capture_scene_frames(
             .await
             .map_err(|e| VidgenError::Browser(format!("Screenshot failed: {e}")))?;
 
-        let output = SceneEncoder::encode_static(
-            output_path,
-            fps,
-            width,
-            height,
-            effective_duration,
-            platform,
-            audio_path,
-            music_path,
-            music_volume,
-            audio_delay_secs,
-            &screenshot,
+        let mut encoder = SceneEncoder::new(
+            output_path, fps, width, height, platform,
+            audio_path, music_path, music_volume, audio_delay_secs,
         )?;
+        for _ in 0..total_frames {
+            encoder.write_frame(&screenshot)?;
+        }
+        let output = encoder.finish()?;
 
         let _ = page.close().await;
         return Ok(output);
@@ -204,19 +207,13 @@ pub async fn capture_scene_frames(
         effective_duration
     );
 
+    // Load HTML once before the frame loop — the template output is identical
+    // across frames; only the CSS custom properties change (injected via JS below).
+    page.set_content(&html_frame0)
+        .await
+        .map_err(|e| VidgenError::Browser(format!("Failed to set page content: {e}")))?;
+
     for frame in 0..total_frames {
-        // Render HTML with current frame number
-        let html = if frame == 0 {
-            html_frame0.clone()
-        } else {
-            registry.render_scene_html(scene, theme, width, height, frame, total_frames)?
-        };
-
-        // Load the HTML into the page
-        page.set_content(&html)
-            .await
-            .map_err(|e| VidgenError::Browser(format!("Failed to set page content: {e}")))?;
-
         // Inject CSS custom properties via JavaScript for dynamic animation
         let content_range = content_end_frame - content_start_frame;
         let content_progress = if content_range > 0.0 {

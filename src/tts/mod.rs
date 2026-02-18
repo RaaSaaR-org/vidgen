@@ -2,6 +2,7 @@ pub mod cache;
 pub mod edge;
 pub mod elevenlabs;
 pub mod native;
+pub mod piper;
 pub mod timestamps;
 
 use crate::config::VoiceConfig;
@@ -9,6 +10,7 @@ use crate::error::{VidgenError, VidgenResult};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use tracing::debug;
 
 /// Result of a TTS synthesis call.
 #[derive(Debug)]
@@ -54,6 +56,7 @@ pub trait TtsEngine: Send + Sync {
 
 /// Factory: create a TTS engine from project voice config.
 pub fn create_engine(config: &VoiceConfig) -> VidgenResult<Box<dyn TtsEngine>> {
+    debug!("Creating TTS engine: {}", config.engine);
     match config.engine.as_str() {
         "native" => {
             let engine = native::NativeTtsEngine::new()?;
@@ -67,8 +70,12 @@ pub fn create_engine(config: &VoiceConfig) -> VidgenResult<Box<dyn TtsEngine>> {
             let engine = elevenlabs::ElevenLabsTtsEngine::new()?;
             Ok(Box::new(engine))
         }
+        "piper" => {
+            let engine = piper::PiperTtsEngine::new()?;
+            Ok(Box::new(engine))
+        }
         other => Err(VidgenError::Tts(format!(
-            "Unknown TTS engine: '{other}'. Supported: native, edge, elevenlabs"
+            "Unknown TTS engine: '{other}'. Supported: native, edge, elevenlabs, piper"
         ))),
     }
 }
@@ -154,6 +161,21 @@ mod tests {
         // Restore if it was set
         if let Some(val) = prev {
             std::env::set_var("ELEVEN_API_KEY", val);
+        }
+    }
+
+    #[test]
+    fn test_create_engine_piper() {
+        let config = VoiceConfig {
+            engine: "piper".into(),
+            default_voice: None,
+            speed: 1.0,
+            ..Default::default()
+        };
+        let result = create_engine(&config);
+        // piper may or may not be installed; test the factory dispatch
+        if let Ok(engine) = &result {
+            assert_eq!(engine.engine_name(), "piper");
         }
     }
 

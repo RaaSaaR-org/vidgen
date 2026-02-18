@@ -18,6 +18,14 @@ use error::VidgenResult;
 async fn main() {
     let cli = Cli::parse();
 
+    // Initialize tracing for non-MCP commands, gated on RUST_LOG env var
+    if !matches!(cli.command, Command::Mcp) && std::env::var("RUST_LOG").is_ok() {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_writer(std::io::stderr)
+            .try_init();
+    }
+
     if let Err(e) = run(cli).await {
         eprintln!("{} {}", "error:".red().bold(), e);
         if let Some(hint) = e.hint() {

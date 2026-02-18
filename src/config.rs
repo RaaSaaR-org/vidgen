@@ -2,6 +2,7 @@ use crate::error::{VidgenError, VidgenResult};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
+use tracing::{debug, warn};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProjectConfig {
@@ -222,6 +223,86 @@ impl Default for OutputConfig {
     }
 }
 
+impl ProjectConfig {
+    /// Validate config values are within acceptable ranges.
+    pub fn validate(&self) -> VidgenResult<()> {
+        if self.video.fps < 1 || self.video.fps > 240 {
+            return Err(VidgenError::ConfigParse(format!(
+                "Invalid fps: {}. Must be between 1 and 240.",
+                self.video.fps
+            )));
+        }
+        if self.video.width < 1 || self.video.width > 7680 {
+            return Err(VidgenError::ConfigParse(format!(
+                "Invalid width: {}. Must be between 1 and 7680.",
+                self.video.width
+            )));
+        }
+        if self.video.height < 1 || self.video.height > 7680 {
+            return Err(VidgenError::ConfigParse(format!(
+                "Invalid height: {}. Must be between 1 and 7680.",
+                self.video.height
+            )));
+        }
+        if self.voice.speed < 0.1 || self.voice.speed > 5.0 {
+            return Err(VidgenError::ConfigParse(format!(
+                "Invalid voice speed: {}. Must be between 0.1 and 5.0.",
+                self.voice.speed
+            )));
+        }
+        if self.voice.padding_before < 0.0 {
+            return Err(VidgenError::ConfigParse(format!(
+                "Invalid padding_before: {}. Must be >= 0.",
+                self.voice.padding_before
+            )));
+        }
+        if self.voice.padding_after < 0.0 {
+            return Err(VidgenError::ConfigParse(format!(
+                "Invalid padding_after: {}. Must be >= 0.",
+                self.voice.padding_after
+            )));
+        }
+        if self.voice.auto_fallback_duration <= 0.0 {
+            return Err(VidgenError::ConfigParse(format!(
+                "Invalid auto_fallback_duration: {}. Must be > 0.",
+                self.voice.auto_fallback_duration
+            )));
+        }
+        if self.video.default_transition.is_some()
+            && self.video.default_transition_duration <= 0.0
+        {
+            return Err(VidgenError::ConfigParse(format!(
+                "Invalid default_transition_duration: {}. Must be > 0 when a default transition is set.",
+                self.video.default_transition_duration
+            )));
+        }
+        if let Some(ref par) = self.video.parallel_scenes {
+            if *par == 0 {
+                return Err(VidgenError::ConfigParse(
+                    "Invalid parallel_scenes: 0. Must be > 0.".into(),
+                ));
+            }
+        }
+        if let Some(ref formats) = self.video.formats {
+            for (name, fc) in formats {
+                if fc.width < 1 || fc.width > 7680 {
+                    return Err(VidgenError::ConfigParse(format!(
+                        "Invalid width {} in format \"{}\". Must be between 1 and 7680.",
+                        fc.width, name
+                    )));
+                }
+                if fc.height < 1 || fc.height > 7680 {
+                    return Err(VidgenError::ConfigParse(format!(
+                        "Invalid height {} in format \"{}\". Must be between 1 and 7680.",
+                        fc.height, name
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Quality settings mapped from quality string
 pub struct QualityPreset {
     pub crf: u32,
@@ -239,10 +320,19 @@ impl QualityPreset {
                 crf: 18,
                 preset: "slow",
             },
-            _ => Self {
+            "standard" => Self {
                 crf: 23,
                 preset: "medium",
-            }, // standard
+            },
+            other => {
+                warn!(
+                    "Unknown quality \"{other}\", using \"standard\". Valid: draft, standard, high"
+                );
+                Self {
+                    crf: 23,
+                    preset: "medium",
+                }
+            }
         }
     }
 }
@@ -430,8 +520,15 @@ pub fn load_config(project_path: &Path) -> VidgenResult<ProjectConfig> {
     if !config_path.exists() {
         return Err(VidgenError::ConfigNotFound(config_path));
     }
+    debug!("Loading config from {}", config_path.display());
     let content = std::fs::read_to_string(&config_path)?;
-    toml::from_str(&content).map_err(|e| VidgenError::ConfigParse(e.to_string()))
+    let config: ProjectConfig =
+        toml::from_str(&content).map_err(|e| VidgenError::ConfigParse(e.to_string()))?;
+    debug!(
+        "Config loaded: fps={}, {}x{}, voice={}",
+        config.video.fps, config.video.width, config.video.height, config.voice.engine
+    );
+    Ok(config)
 }
 
 #[cfg(test)]
@@ -827,6 +924,146 @@ name = "No Parallel"
 "#;
         let config: ProjectConfig = toml::from_str(toml).unwrap();
         assert!(config.video.parallel_scenes.is_none());
+    }
+
+    #[test]
+    fn test_validate_ok() {
+        let config = ProjectConfig {
+            project: ProjectInfo {
+                name: "Valid".into(),
+                version: "1.0.0".into(),
+            },
+            video: VideoConfig::default(),
+            voice: VoiceConfig::default(),
+            theme: ThemeConfig::default(),
+            output: OutputConfig::default(),
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_fps_zero() {
+        let config = ProjectConfig {
+            project: ProjectInfo {
+                name: "Bad FPS".into(),
+                version: "1.0.0".into(),
+            },
+            video: VideoConfig {
+                fps: 0,
+                ..Default::default()
+            },
+            voice: VoiceConfig::default(),
+            theme: ThemeConfig::default(),
+            output: OutputConfig::default(),
+        };
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("Invalid fps: 0"));
+    }
+
+    #[test]
+    fn test_validate_fps_too_high() {
+        let config = ProjectConfig {
+            project: ProjectInfo {
+                name: "Bad FPS".into(),
+                version: "1.0.0".into(),
+            },
+            video: VideoConfig {
+                fps: 300,
+                ..Default::default()
+            },
+            voice: VoiceConfig::default(),
+            theme: ThemeConfig::default(),
+            output: OutputConfig::default(),
+        };
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("Invalid fps: 300"));
+    }
+
+    #[test]
+    fn test_validate_negative_padding() {
+        let config = ProjectConfig {
+            project: ProjectInfo {
+                name: "Bad Padding".into(),
+                version: "1.0.0".into(),
+            },
+            video: VideoConfig::default(),
+            voice: VoiceConfig {
+                padding_before: -1.0,
+                ..Default::default()
+            },
+            theme: ThemeConfig::default(),
+            output: OutputConfig::default(),
+        };
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("padding_before"));
+    }
+
+    #[test]
+    fn test_validate_voice_speed_out_of_range() {
+        let config = ProjectConfig {
+            project: ProjectInfo {
+                name: "Bad Speed".into(),
+                version: "1.0.0".into(),
+            },
+            video: VideoConfig::default(),
+            voice: VoiceConfig {
+                speed: 0.0,
+                ..Default::default()
+            },
+            theme: ThemeConfig::default(),
+            output: OutputConfig::default(),
+        };
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("voice speed"));
+    }
+
+    #[test]
+    fn test_validate_parallel_scenes_zero() {
+        let config = ProjectConfig {
+            project: ProjectInfo {
+                name: "Bad Parallel".into(),
+                version: "1.0.0".into(),
+            },
+            video: VideoConfig {
+                parallel_scenes: Some(0),
+                ..Default::default()
+            },
+            voice: VoiceConfig::default(),
+            theme: ThemeConfig::default(),
+            output: OutputConfig::default(),
+        };
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("parallel_scenes"));
+    }
+
+    #[test]
+    fn test_validate_format_dimensions() {
+        let mut formats = BTreeMap::new();
+        formats.insert(
+            "bad".into(),
+            FormatConfig {
+                width: 0,
+                height: 1080,
+                label: None,
+                platform: None,
+            },
+        );
+        let config = ProjectConfig {
+            project: ProjectInfo {
+                name: "Bad Format".into(),
+                version: "1.0.0".into(),
+            },
+            video: VideoConfig {
+                formats: Some(formats),
+                ..Default::default()
+            },
+            voice: VoiceConfig::default(),
+            theme: ThemeConfig::default(),
+            output: OutputConfig::default(),
+        };
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("width 0"));
+        assert!(err.to_string().contains("\"bad\""));
     }
 
     #[test]

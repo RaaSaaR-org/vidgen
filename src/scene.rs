@@ -5,6 +5,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use tracing::{debug, warn};
 
 /// Scene duration: either automatically derived from TTS audio length + padding,
 /// or a fixed number of seconds.
@@ -226,6 +227,23 @@ pub fn parse_scene(content: &str, path: &Path) -> VidgenResult<Scene> {
             message: e.to_string(),
         })?;
 
+    // Validate duration is positive
+    if let SceneDuration::Fixed(d) = &frontmatter.duration {
+        if *d <= 0.0 {
+            return Err(VidgenError::SceneParse {
+                path: path.to_path_buf(),
+                message: format!("Invalid duration: {d}. Must be > 0."),
+            });
+        }
+    }
+
+    debug!(
+        "Parsed scene {}: template={}, duration={:?}",
+        path.display(),
+        frontmatter.template,
+        frontmatter.duration
+    );
+
     Ok(Scene {
         frontmatter,
         script: body.to_string(),
@@ -251,17 +269,28 @@ pub fn load_scenes(project_path: &Path) -> VidgenResult<Vec<Scene>> {
         return Err(VidgenError::NoScenes(scenes_dir));
     }
 
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(&scenes_dir)?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|ext| ext == "md"))
-        .collect();
+    let mut entries: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(&scenes_dir)? {
+        match entry {
+            Ok(e) => {
+                let path = e.path();
+                if path.extension().is_some_and(|ext| ext == "md") {
+                    entries.push(path);
+                }
+            }
+            Err(e) => {
+                warn!("Could not read entry in {}: {}", scenes_dir.display(), e);
+            }
+        }
+    }
 
     entries.sort();
 
     if entries.is_empty() {
         return Err(VidgenError::NoScenes(scenes_dir));
     }
+
+    debug!("Loading {} scene(s) from {}", entries.len(), scenes_dir.display());
 
     let mut scenes = Vec::new();
     for path in entries {
@@ -604,6 +633,24 @@ Script."#;
         let content = "---\ntemplate: title-card\nduration: 2.5s\n---\nScript.";
         let scene = parse_scene(content, Path::new("test.md")).unwrap();
         assert_eq!(scene.frontmatter.duration, SceneDuration::Fixed(2.5));
+    }
+
+    #[test]
+    fn test_parse_scene_negative_duration() {
+        let content = "---\ntemplate: title-card\nduration: -5\n---\nScript.";
+        let result = parse_scene(content, Path::new("test.md"));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Invalid duration"));
+    }
+
+    #[test]
+    fn test_parse_scene_zero_duration() {
+        let content = "---\ntemplate: title-card\nduration: 0\n---\nScript.";
+        let result = parse_scene(content, Path::new("test.md"));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Invalid duration"));
     }
 
     #[test]

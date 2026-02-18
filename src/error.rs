@@ -63,8 +63,24 @@ impl VidgenError {
                 "Add .md files to the scenes/ directory. Run 'vidgen init' for a starter project."
                     .into(),
             ),
+            VidgenError::ConfigParse(msg) => {
+                if msg.contains("missing field") {
+                    Some("Ensure your project.toml has a [project] section with at least 'name'. Run 'vidgen init' for a valid example.".into())
+                } else {
+                    Some("Check project.toml syntax. Run 'vidgen init <path>' to generate a valid example config.".into())
+                }
+            }
+            VidgenError::SceneParse { message, .. } => {
+                if message.contains("template") {
+                    Some("Built-in templates: title-card, content-text, quote-card, split-screen, lower-third, cta-card, kinetic-text, slideshow, caption-overlay. Custom templates go in templates/components/.".into())
+                } else if message.contains("frontmatter") || message.contains("---") {
+                    Some("Scene files need YAML frontmatter between --- delimiters at the top of the file.".into())
+                } else {
+                    Some("Check YAML syntax in the scene frontmatter. Keys must be properly indented and values properly quoted.".into())
+                }
+            }
             VidgenError::TemplateNotFound(_) => Some(
-                "Built-in templates: title-card, content-text, quote-card, split-screen, lower-third, cta-card, kinetic-text. Check 'template:' in your scene frontmatter.".into(),
+                "Built-in templates: title-card, content-text, quote-card, split-screen, lower-third, cta-card, kinetic-text, slideshow, caption-overlay. Custom templates go in templates/components/.".into(),
             ),
             VidgenError::Browser(_) => Some(
                 "Ensure Chromium/Chrome is installed, or let chromiumoxide download it automatically."
@@ -83,7 +99,7 @@ impl VidgenError {
                 "Use a different path, or delete the existing project first.".into(),
             ),
             VidgenError::Tts(_) => Some(
-                "Ensure a TTS engine is available. macOS: 'say' (built-in). Linux: install espeak-ng. For neural voices: pip install edge-tts. For ElevenLabs: set ELEVEN_API_KEY env var or add it to .env in your project".into(),
+                "Ensure a TTS engine is available. macOS: 'say' (built-in). Linux: install espeak-ng. For neural voices: pip install edge-tts. For local neural TTS: install piper (https://github.com/rhasspy/piper). For ElevenLabs: set ELEVEN_API_KEY env var or add it to .env in your project".into(),
             ),
             _ => None,
         }

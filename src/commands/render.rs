@@ -31,8 +31,9 @@ pub async fn render_project(
         return Err(VidgenError::ProjectNotFound(path.to_path_buf()));
     }
 
-    // Load config
+    // Load config and validate
     let mut config = config::load_config(path)?;
+    config.validate()?;
 
     // Apply overrides
     let fps = fps.unwrap_or(config.video.fps);
@@ -117,6 +118,7 @@ pub async fn render_project_with_progress(
     }
 
     let config = config::load_config(path)?;
+    config.validate()?;
     let fps = fps.unwrap_or(config.video.fps);
     let quality_name = quality.as_deref().unwrap_or(&config.output.quality);
     let all_scenes = scene::load_scenes(path)?;

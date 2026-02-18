@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --frame: {{frame}};
+    --total-frames: {{total_frames}};
+    --progress: calc(var(--frame) / var(--total-frames));
+    --content-progress: var(--progress);
+  }
+
+  body {
+    width: {{width}}px;
+    height: {{height}}px;
+    overflow: hidden;
+    background: {{effective_background}};
+    color: {{theme_text}};
+    font-family: '{{theme_font_heading}}', system-ui, -apple-system, sans-serif;
+  }
+
+  .scene-container {
+    container-type: size;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 5% 8%;
+  }
+
+  .section-title {
+    font-size: clamp(2rem, 3.5vw, 3.5rem);
+    font-weight: 800;
+    margin-bottom: 0.8rem;
+    opacity: clamp(0, calc(var(--progress) * (1 / 0.1)), 1);
+    transform: translateY(calc((1 - clamp(0, calc(var(--progress) * (1 / 0.1)), 1)) * 30px));
+  }
+
+  .progress-bar-track {
+    width: min(500px, 60%);
+    height: 4px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    margin-bottom: 3rem;
+    overflow: hidden;
+    opacity: clamp(0, calc(var(--progress) * (1 / 0.1)), 1);
+  }
+
+  .progress-bar-fill {
+    height: 100%;
+    background: {{theme_primary}};
+    border-radius: 2px;
+    width: calc(var(--progress) * 100%);
+    transition: none;
+  }
+
+  .items-list {
+    list-style: none;
+    width: min(800px, 85%);
+  }
+
+  .item {
+    display: flex;
+    align-items: flex-start;
+    gap: 1.2rem;
+    padding: 1.2rem 1.5rem;
+    margin-bottom: 0.8rem;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .item-icon {
+    font-size: clamp(1.5rem, 2.5vw, 2.5rem);
+    flex-shrink: 0;
+    line-height: 1;
+    margin-top: 0.1em;
+  }
+
+  .item-content {
+    flex: 1;
+  }
+
+  .item-title {
+    font-size: clamp(1.2rem, 2vw, 1.8rem);
+    font-weight: 700;
+    margin-bottom: 0.3rem;
+  }
+
+  .item-description {
+    font-size: clamp(0.9rem, 1.4vw, 1.3rem);
+    font-family: '{{theme_font_body}}', system-ui, -apple-system, sans-serif;
+    font-weight: 400;
+    opacity: 0.7;
+    line-height: 1.4;
+  }
+
+  @container (aspect-ratio < 1) {
+    .scene-container {
+      padding: 8% 6%;
+    }
+    .section-title {
+      font-size: clamp(1.8rem, 6vw, 3rem);
+    }
+    .progress-bar-track {
+      width: 80%;
+    }
+    .items-list {
+      width: 95%;
+    }
+    .item {
+      padding: 1rem 1.2rem;
+      gap: 1rem;
+    }
+    .item-icon {
+      font-size: clamp(1.3rem, 5vw, 2.2rem);
+    }
+    .item-title {
+      font-size: clamp(1.1rem, 4vw, 1.6rem);
+    }
+    .item-description {
+      font-size: clamp(0.85rem, 3vw, 1.2rem);
+    }
+  }
+</style>
+</head>
+<body>
+  <div class="scene-container">
+    {{#if title}}
+    <h1 class="section-title">{{title}}</h1>
+    {{/if}}
+    <div class="progress-bar-track">
+      <div class="progress-bar-fill"></div>
+    </div>
+    {{#if items}}
+    <ul class="items-list">
+      {{#each items}}
+      <li class="item" style="--item-index: {{@index}}; opacity: clamp(0, calc((var(--content-progress) - 0.1 - {{@index}} * 0.22) * 6), 1); transform: translateY(calc((1 - clamp(0, calc((var(--content-progress) - 0.1 - {{@index}} * 0.22) * 6), 1)) * 40px));">
+        <div class="item-icon">{{this.icon}}</div>
+        <div class="item-content">
+          <div class="item-title">{{this.title}}</div>
+          <div class="item-description">{{this.description}}</div>
+        </div>
+      </li>
+      {{/each}}
+    </ul>
+    {{/if}}
+  </div>
+</body>
+</html>

@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --frame: {{frame}};
+    --total-frames: {{total_frames}};
+    --progress: calc(var(--frame) / var(--total-frames));
+  }
+
+  body {
+    width: {{width}}px;
+    height: {{height}}px;
+    overflow: hidden;
+    background: {{effective_background}};
+    color: {{theme_text}};
+    font-family: '{{theme_font_heading}}', system-ui, -apple-system, sans-serif;
+  }
+
+  .scene-container {
+    container-type: size;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .counter-wrapper {
+    text-align: center;
+    padding: 0 10%;
+  }
+
+  .counter-value {
+    font-size: clamp(6rem, 14vw, 14rem);
+    font-weight: 900;
+    line-height: 1;
+    color: {{theme_primary}};
+    font-variant-numeric: tabular-nums;
+    /* CSS counter trick: counter-reset accepts calc() values, truncated to integer */
+    counter-reset: val calc(var(--progress) * {{value}});
+  }
+
+  .counter-value::after {
+    content: counter(val) "{{unit}}";
+  }
+
+  .label {
+    font-size: clamp(1.3rem, 2.5vw, 2.5rem);
+    font-weight: 500;
+    font-family: '{{theme_font_body}}', system-ui, -apple-system, sans-serif;
+    margin-top: 1.5rem;
+    opacity: clamp(0, calc(var(--progress) * (1 / 0.15)), 0.8);
+  }
+
+  .accent-line {
+    width: 60px;
+    height: 4px;
+    background: {{theme_primary}};
+    margin: 1.5rem auto 0;
+    border-radius: 2px;
+    transform: scaleX(clamp(0, calc(var(--progress) * (1 / 0.2)), 1));
+  }
+
+  @container (aspect-ratio < 1) {
+    .counter-value {
+      font-size: clamp(5rem, 20vw, 12rem);
+    }
+    .label {
+      font-size: clamp(1.3rem, 5vw, 2.5rem);
+    }
+  }
+</style>
+</head>
+<body>
+  <div class="scene-container">
+    <div class="counter-wrapper">
+      <div class="counter-value"></div>
+      {{#if label}}
+      <div class="label">{{label}}</div>
+      {{/if}}
+      <div class="accent-line"></div>
+    </div>
+  </div>
+</body>
+</html>

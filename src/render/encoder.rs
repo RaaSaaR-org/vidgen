@@ -1,9 +1,11 @@
 use crate::config::{PlatformPreset, VideoConfig};
 use crate::error::{VidgenError, VidgenResult};
 use crate::scene::Scene;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::thread::JoinHandle;
+use tracing::{debug, warn};
 
 // ---------------------------------------------------------------------------
 // Transition types
@@ -30,7 +32,10 @@ impl TransitionType {
             "zoom" => Self::Zoom,
             "wipe" | "wipeleft" | "wipe-left" => Self::Wipe,
             "none" | "" => Self::None,
-            _ => Self::Fade, // default to fade for unknown
+            other => {
+                warn!("Unknown transition \"{other}\", defaulting to fade");
+                Self::Fade
+            }
         }
     }
 
@@ -96,6 +101,7 @@ pub fn resolve_transition(
 pub struct SceneEncoder {
     child: Child,
     output_path: PathBuf,
+    stderr_handle: Option<JoinHandle<String>>,
 }
 
 impl SceneEncoder {
@@ -213,142 +219,29 @@ impl SceneEncoder {
         cmd.stdout(Stdio::null());
         cmd.stderr(Stdio::piped());
 
-        let child = cmd
+        debug!(
+            "Spawning FFmpeg encoder: {}x{} @ {}fps, crf={}",
+            width, height, fps, platform.crf
+        );
+
+        let mut child = cmd
             .spawn()
             .map_err(|e| VidgenError::Ffmpeg(format!("Failed to spawn ffmpeg: {e}")))?;
+
+        // Drain stderr in a background thread to prevent pipe deadlock
+        let stderr_handle = child.stderr.take().map(|mut stderr| {
+            std::thread::spawn(move || {
+                let mut buf = String::new();
+                let _ = stderr.read_to_string(&mut buf);
+                buf
+            })
+        });
 
         Ok(Self {
             child,
             output_path: output_path.to_path_buf(),
+            stderr_handle,
         })
-    }
-
-    /// Encode a static scene from a single PNG frame looped for the given duration.
-    /// This avoids per-frame screenshots for scenes that don't use animation variables.
-    #[allow(clippy::too_many_arguments)]
-    pub fn encode_static(
-        output_path: &Path,
-        fps: u32,
-        width: u32,
-        height: u32,
-        duration: f64,
-        platform: &PlatformPreset,
-        audio_path: Option<&Path>,
-        music_path: Option<&Path>,
-        music_volume: f64,
-        audio_delay_secs: f64,
-        frame_png: &[u8],
-    ) -> VidgenResult<PathBuf> {
-        // Write the single frame to a temp file
-        let temp_dir = output_path.parent().unwrap_or(Path::new("."));
-        let temp_png = temp_dir.join(format!(
-            ".vidgen-static-{}.png",
-            output_path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("frame")
-        ));
-        std::fs::write(&temp_png, frame_png)?;
-
-        let mut cmd = Command::new("ffmpeg");
-        cmd.args(["-y", "-loop", "1", "-framerate", &fps.to_string(), "-i"]);
-        cmd.arg(&temp_png);
-        cmd.args(["-t", &format!("{duration:.3}")]);
-
-        let has_voice = audio_path.is_some();
-        let has_music = music_path.is_some();
-
-        if let Some(audio) = audio_path {
-            cmd.args(["-i"]).arg(audio.as_os_str());
-        }
-        if let Some(music) = music_path {
-            cmd.args(["-i"]).arg(music.as_os_str());
-        }
-
-        cmd.args([
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
-            "-s",
-            &format!("{width}x{height}"),
-            "-crf",
-            &platform.crf.to_string(),
-            "-preset",
-            platform.preset,
-            "-movflags",
-            "+faststart",
-        ]);
-
-        let delay_ms = (audio_delay_secs * 1000.0).round() as u64;
-        match (has_voice, has_music) {
-            (true, true) => {
-                let voice_chain = if delay_ms > 0 {
-                    format!("[1:a]adelay={delay_ms}|{delay_ms},volume=1.0[voice]")
-                } else {
-                    "[1:a]volume=1.0[voice]".to_string()
-                };
-                let filter = format!(
-                    "{voice_chain};[2:a]volume={music_volume:.2}[music];\
-                     [voice][music]amix=inputs=2:duration=first:dropout_transition=2[aout]"
-                );
-                cmd.args(["-filter_complex", &filter, "-map", "0:v", "-map", "[aout]"]);
-                cmd.args([
-                    "-c:a",
-                    "aac",
-                    "-b:a",
-                    platform.audio_bitrate,
-                    "-ar",
-                    &platform.audio_samplerate.to_string(),
-                ]);
-            }
-            (true, false) => {
-                if delay_ms > 0 {
-                    cmd.args(["-af", &format!("adelay={delay_ms}|{delay_ms}")]);
-                }
-                cmd.args([
-                    "-c:a",
-                    "aac",
-                    "-b:a",
-                    platform.audio_bitrate,
-                    "-ar",
-                    &platform.audio_samplerate.to_string(),
-                ]);
-            }
-            (false, true) => {
-                let filter = format!("[1:a]volume={music_volume:.2}[aout]");
-                cmd.args(["-filter_complex", &filter, "-map", "0:v", "-map", "[aout]"]);
-                cmd.args([
-                    "-c:a",
-                    "aac",
-                    "-b:a",
-                    platform.audio_bitrate,
-                    "-ar",
-                    &platform.audio_samplerate.to_string(),
-                ]);
-            }
-            (false, false) => {}
-        }
-
-        cmd.arg(output_path.as_os_str());
-        cmd.stdout(Stdio::null());
-        cmd.stderr(Stdio::piped());
-
-        let output = cmd
-            .output()
-            .map_err(|e| VidgenError::Ffmpeg(format!("Failed to spawn ffmpeg (static): {e}")))?;
-
-        let _ = std::fs::remove_file(&temp_png);
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(VidgenError::Ffmpeg(format!(
-                "FFmpeg static encode failed: {}",
-                stderr.lines().last().unwrap_or("unknown error")
-            )));
-        }
-
-        Ok(output_path.to_path_buf())
     }
 
     /// Write a single PNG frame to FFmpeg's stdin.
@@ -371,17 +264,26 @@ impl SceneEncoder {
         // Drop stdin to signal EOF
         drop(self.child.stdin.take());
 
-        let output = self
+        let status = self
             .child
-            .wait_with_output()
+            .wait()
             .map_err(|e| VidgenError::Ffmpeg(format!("FFmpeg wait failed: {e}")))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        // Collect stderr from background drain thread
+        let stderr_output = self
+            .stderr_handle
+            .take()
+            .and_then(|h| h.join().ok())
+            .unwrap_or_default();
+
+        if !status.success() {
+            let last_line = stderr_output
+                .lines()
+                .last()
+                .unwrap_or("unknown error");
             return Err(VidgenError::Ffmpeg(format!(
-                "FFmpeg exited with {}: {}",
-                output.status,
-                stderr.lines().last().unwrap_or("unknown error")
+                "FFmpeg encoding failed (exit {}): {}",
+                status, last_line
             )));
         }
 
@@ -461,6 +363,11 @@ pub fn concat_scenes_with_transitions(
     output_path: &Path,
     platform: &PlatformPreset,
 ) -> VidgenResult<()> {
+    debug!(
+        "Concatenating {} scenes to {}",
+        scene_files.len(),
+        output_path.display()
+    );
     if scene_files.len() == 1 {
         std::fs::copy(&scene_files[0], output_path)?;
         return Ok(());

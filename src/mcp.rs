@@ -349,7 +349,7 @@ pub struct SetProjectConfigParams {
     pub default_transition_duration: Option<f64>,
     /// TTS engine name (e.g. "native")
     #[schemars(
-        description = "TTS engine: native (default), edge (Microsoft Edge neural TTS), elevenlabs (set ELEVEN_API_KEY in env or project .env file)"
+        description = "TTS engine: native (default), edge (Microsoft Edge neural TTS), elevenlabs (set ELEVEN_API_KEY in env or project .env file), piper (local neural TTS)"
     )]
     pub voice_engine: Option<String>,
     /// Default voice ID for TTS
@@ -961,7 +961,7 @@ impl ServerHandler for McServer {
             }
             "vidgen://voices" => {
                 let mut all_voices = Vec::new();
-                for engine_name in &["native", "edge"] {
+                for engine_name in &["native", "edge", "piper"] {
                     let vc = crate::config::VoiceConfig {
                         engine: engine_name.to_string(),
                         ..Default::default()

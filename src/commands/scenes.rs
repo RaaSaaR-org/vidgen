@@ -462,7 +462,7 @@ pub fn list_voices() -> Vec<VoiceInfo> {
     let mut all_voices = Vec::new();
 
     // Query each known engine; skip engines that aren't installed
-    for engine_name in &["native", "edge", "elevenlabs"] {
+    for engine_name in &["native", "edge", "elevenlabs", "piper"] {
         let voice_config = crate::config::VoiceConfig {
             engine: (*engine_name).to_string(),
             ..crate::config::VoiceConfig::default()

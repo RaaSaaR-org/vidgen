@@ -16,6 +16,7 @@ use rmcp::model::ProgressNotificationParam;
 use rmcp::{Peer, RoleServer};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 /// Render progress reporter. Sends MCP progress notifications when running
 /// via the MCP server, or does nothing (noop) when running from the CLI.
@@ -193,6 +194,8 @@ pub async fn render_project(
         fps,
         quality_name,
     );
+
+    let render_start = Instant::now();
 
     // Create output directory
     std::fs::create_dir_all(output_dir)?;
@@ -459,6 +462,7 @@ pub async fn render_project(
         // Render scenes concurrently with bounded parallelism
         let scene_results: Vec<_> = stream::iter(0..scenes.len())
             .map(|i| async move {
+                let scene_start = Instant::now();
                 let scene = &scenes_ref[i];
                 let scene_output = &prep_ref[i].0;
                 let audio = &prep_ref[i].1;
@@ -485,7 +489,8 @@ pub async fn render_project(
                     Some(project_path_ref),
                 )
                 .await?;
-                Ok::<_, crate::error::VidgenError>((i, path, dur))
+                let render_secs = scene_start.elapsed().as_secs_f64();
+                Ok::<_, crate::error::VidgenError>((i, path, dur, render_secs))
             })
             .buffer_unordered(max_parallel)
             .collect()
@@ -494,10 +499,12 @@ pub async fn render_project(
         // Collect results in scene order
         let mut scene_files: Vec<PathBuf> = vec![PathBuf::new(); scenes.len()];
         let mut scene_durs: Vec<f64> = vec![0.0; scenes.len()];
+        let mut scene_render_times: Vec<f64> = vec![0.0; scenes.len()];
         for result in scene_results {
-            let (i, path, dur) = result?;
+            let (i, path, dur, render_secs) = result?;
             scene_files[i] = path;
             scene_durs[i] = dur;
+            scene_render_times[i] = render_secs;
 
             // Progress: scene captured
             let done = scenes.len() as f64 + (fmt_idx * steps_per_format + i + 1) as f64;
@@ -633,6 +640,29 @@ pub async fn render_project(
     progress
         .report(total_steps, total_steps, "Render complete")
         .await;
+
+    // Print timing report
+    let total_render_time = render_start.elapsed();
+    let total_video_duration: f64 = effective_durations.iter().sum();
+    eprintln!();
+    eprintln!("{}", "Scene Timing Report:".cyan().bold());
+    for (i, scene) in scenes.iter().enumerate() {
+        let scene_name = scene.source_path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown");
+        eprintln!(
+            "  {}: {:.1}s video",
+            scene_name,
+            effective_durations[i],
+        );
+    }
+    eprintln!("  {}", "─".repeat(40));
+    eprintln!(
+        "  Total: {:.1}s video, {:.1}s render time",
+        total_video_duration,
+        total_render_time.as_secs_f64()
+    );
+    eprintln!();
 
     Ok(results)
 }

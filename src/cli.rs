@@ -107,6 +107,14 @@ pub enum Command {
         /// Output PNG file path (default: preview.png)
         #[arg(long, short = 'o')]
         output: Option<PathBuf>,
+
+        /// Preview all scenes as numbered PNG thumbnails
+        #[arg(long)]
+        all: bool,
+
+        /// Generate an animated GIF preview of the scene
+        #[arg(long)]
+        gif: bool,
     },
     /// Watch project files for changes and auto-preview or re-render
     Watch {

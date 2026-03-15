@@ -16,13 +16,26 @@ pub fn synthesize_cached(
     output_path: &Path,
     project_path: &Path,
 ) -> VidgenResult<SynthesisResult> {
+    synthesize_cached_with_options(engine, text, voice, speed, output_path, project_path, false)
+}
+
+/// Synthesize TTS with caching support and optional force flag.
+pub fn synthesize_cached_with_options(
+    engine: &dyn TtsEngine,
+    text: &str,
+    voice: Option<&str>,
+    speed: f32,
+    output_path: &Path,
+    project_path: &Path,
+    force: bool,
+) -> VidgenResult<SynthesisResult> {
     let hash = cache_key(engine.engine_name(), voice, speed, text);
     let cache_dir = project_path.join("assets/voiceover");
     let cached_wav = cache_dir.join(format!("{hash}.wav"));
     let cached_json = cache_dir.join(format!("{hash}.json"));
 
-    // Cache hit: both .wav and .json sidecar exist
-    if cached_wav.exists() && cached_json.exists() {
+    // Cache hit: both .wav and .json sidecar exist (skip if force=true)
+    if !force && cached_wav.exists() && cached_json.exists() {
         if let Some(duration_secs) = read_sidecar(&cached_json) {
             std::fs::copy(&cached_wav, output_path)?;
             return Ok(SynthesisResult {

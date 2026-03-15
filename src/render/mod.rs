@@ -178,6 +178,7 @@ pub async fn render_project(
     project_path: &Path,
     progress: RenderProgress,
     format_filter: Option<&[String]>,
+    force_tts: bool,
 ) -> VidgenResult<Vec<FormatOutput>> {
     let quality = QualityPreset::from_name(quality_name);
     let mut registry = TemplateRegistry::new()?;
@@ -269,13 +270,14 @@ pub async fn render_project(
             tts_engine.as_ref().unwrap().as_ref()
         };
 
-        match tts::cache::synthesize_cached(
+        match tts::cache::synthesize_cached_with_options(
             effective_engine,
             script,
             voice,
             speed,
             &wav_path,
             project_path,
+            force_tts,
         ) {
             Ok(result) => {
                 let tag = if result.cached { " (cached)" } else { "" };
@@ -294,6 +296,31 @@ pub async fn render_project(
                 tts_durations.push(None);
             }
         }
+    }
+
+    // Copy TTS audio files to output/audio/ for standalone access
+    let audio_output_dir = output_dir.join("audio");
+    let mut audio_copied = false;
+    for (i, scene) in scenes.iter().enumerate() {
+        if let Some(ref audio_path) = audio_paths[i] {
+            if !audio_copied {
+                std::fs::create_dir_all(&audio_output_dir)?;
+                audio_copied = true;
+            }
+            let fallback_name = format!("scene-{:02}", i + 1);
+            let scene_name = scene.source_path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&fallback_name);
+            let dest = audio_output_dir.join(format!("{scene_name}.wav"));
+            std::fs::copy(audio_path, &dest)?;
+        }
+    }
+    if audio_copied {
+        eprintln!(
+            "{} Audio files saved to {}",
+            "done:".green().bold(),
+            audio_output_dir.display()
+        );
     }
 
     // Duration resolution pass — runs once (format-independent)

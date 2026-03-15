@@ -57,8 +57,9 @@ async fn run(cli: Cli) -> VidgenResult<()> {
             subtitles,
             burn_in,
             parallel,
+            force_tts,
         } => {
-            commands::render::run(&path, fps, quality, formats, scenes, subtitles, burn_in, parallel)
+            commands::render::run(&path, fps, quality, formats, scenes, subtitles, burn_in, parallel, force_tts)
                 .await
         }
         Command::Preview {

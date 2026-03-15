@@ -115,6 +115,8 @@ pub async fn run(
                         scene_index,
                         0,
                         Some(output_path),
+                        false,
+                        false,
                     )
                     .await
                     {

@@ -66,7 +66,9 @@ async fn run(cli: Cli) -> VidgenResult<()> {
             scene,
             frame,
             output,
-        } => commands::preview::run(&path, scene, frame, output).await,
+            all,
+            gif,
+        } => commands::preview::run(&path, scene, frame, output, all, gif).await,
         Command::Watch {
             path,
             render,

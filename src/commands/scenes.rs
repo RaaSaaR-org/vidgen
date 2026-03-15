@@ -283,7 +283,11 @@ pub fn update_scene(
         fields_updated.push("transition_out".to_string());
     }
     if let Some(ref voice) = update.voice {
-        scene.frontmatter.voice = Some(voice.clone());
+        scene.frontmatter.voice = Some(crate::scene::SceneVoiceConfig {
+            engine: None,
+            voice: Some(voice.clone()),
+            speed: None,
+        });
         fields_updated.push("voice".to_string());
     }
 
@@ -927,7 +931,7 @@ mod tests {
             Some("fade")
         );
         assert_eq!(
-            scenes[1].frontmatter.voice.as_deref(),
+            scenes[1].frontmatter.voice.as_ref().and_then(|v| v.voice_name()),
             Some("en-US-AriaNeural")
         );
         assert_eq!(

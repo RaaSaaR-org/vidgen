@@ -821,7 +821,7 @@ mod tests {
         let scenes = crate::scene::load_scenes(&project_path).unwrap();
         assert_eq!(scenes[0].frontmatter.transition_in.as_deref(), Some("fade"));
         assert_eq!(
-            scenes[0].frontmatter.voice.as_deref(),
+            scenes[0].frontmatter.voice.as_ref().and_then(|v| v.voice_name()),
             Some("en-US-GuyNeural")
         );
         assert_eq!(

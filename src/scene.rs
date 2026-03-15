@@ -126,6 +126,79 @@ impl schemars::JsonSchema for SceneDuration {
     }
 }
 
+/// Per-scene voice configuration. Supports two forms in YAML frontmatter:
+///
+/// Simple (voice name only, backward-compatible):
+/// ```yaml
+/// voice: "en-US-JennyNeural"
+/// ```
+///
+/// Structured (engine + voice + optional speed):
+/// ```yaml
+/// voice:
+///   engine: edge
+///   voice: "en-US-JennyNeural"
+///   speed: 1.2
+/// ```
+#[derive(Debug, Clone, Serialize)]
+pub struct SceneVoiceConfig {
+    /// TTS engine override (native, edge, elevenlabs, piper)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
+    /// Voice ID/name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice: Option<String>,
+    /// Speed override
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speed: Option<f32>,
+}
+
+impl SceneVoiceConfig {
+    /// Get the voice name, if set.
+    pub fn voice_name(&self) -> Option<&str> {
+        self.voice.as_deref()
+    }
+}
+
+impl<'de> Deserialize<'de> for SceneVoiceConfig {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct SceneVoiceVisitor;
+
+        impl<'de> Visitor<'de> for SceneVoiceVisitor {
+            type Value = SceneVoiceConfig;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a voice name string or a {engine, voice, speed} object")
+            }
+
+            fn visit_str<E: de::Error>(self, value: &str) -> Result<SceneVoiceConfig, E> {
+                Ok(SceneVoiceConfig {
+                    engine: None,
+                    voice: Some(value.to_string()),
+                    speed: None,
+                })
+            }
+
+            fn visit_map<M: de::MapAccess<'de>>(self, mut map: M) -> Result<SceneVoiceConfig, M::Error> {
+                let mut engine = None;
+                let mut voice = None;
+                let mut speed = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "engine" => engine = Some(map.next_value()?),
+                        "voice" => voice = Some(map.next_value()?),
+                        "speed" => speed = Some(map.next_value()?),
+                        _ => { let _ = map.next_value::<serde_json::Value>(); }
+                    }
+                }
+                Ok(SceneVoiceConfig { engine, voice, speed })
+            }
+        }
+
+        deserializer.deserialize_any(SceneVoiceVisitor)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct SceneAudioConfig {
     /// Path to a background music file (supports @assets/ prefix)
@@ -152,7 +225,7 @@ pub struct SceneFrontmatter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transition_duration: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub voice: Option<String>,
+    pub voice: Option<SceneVoiceConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio: Option<SceneAudioConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -511,7 +584,7 @@ mod tests {
         assert_eq!(scene.frontmatter.transition_in.as_deref(), Some("fade"));
         assert_eq!(scene.frontmatter.transition_out.as_deref(), Some("slide"));
         assert_eq!(scene.frontmatter.transition_duration, Some(0.75));
-        assert_eq!(scene.frontmatter.voice.as_deref(), Some("en_US-male"));
+        assert_eq!(scene.frontmatter.voice.as_ref().and_then(|v| v.voice_name()), Some("en_US-male"));
     }
 
     #[test]
@@ -709,6 +782,47 @@ Script."#;
             url_extension("https://example.com/path/image.jpg#fragment"),
             "jpg"
         );
+    }
+
+    #[test]
+    fn test_parse_scene_voice_string() {
+        let content = "---\ntemplate: title-card\nvoice: en-US-JennyNeural\n---\nText.";
+        let scene = parse_scene(content, Path::new("test.md")).unwrap();
+        let voice = scene.frontmatter.voice.as_ref().unwrap();
+        assert_eq!(voice.voice_name(), Some("en-US-JennyNeural"));
+        assert!(voice.engine.is_none());
+        assert!(voice.speed.is_none());
+    }
+
+    #[test]
+    fn test_parse_scene_voice_struct() {
+        let content = r#"---
+template: title-card
+voice:
+  engine: edge
+  voice: "de-DE-ConradNeural"
+  speed: 1.2
+---
+Text."#;
+        let scene = parse_scene(content, Path::new("test.md")).unwrap();
+        let voice = scene.frontmatter.voice.as_ref().unwrap();
+        assert_eq!(voice.engine.as_deref(), Some("edge"));
+        assert_eq!(voice.voice_name(), Some("de-DE-ConradNeural"));
+        assert_eq!(voice.speed, Some(1.2));
+    }
+
+    #[test]
+    fn test_parse_scene_voice_engine_only() {
+        let content = r#"---
+template: title-card
+voice:
+  engine: piper
+---
+Text."#;
+        let scene = parse_scene(content, Path::new("test.md")).unwrap();
+        let voice = scene.frontmatter.voice.as_ref().unwrap();
+        assert_eq!(voice.engine.as_deref(), Some("piper"));
+        assert!(voice.voice_name().is_none());
     }
 
     #[test]

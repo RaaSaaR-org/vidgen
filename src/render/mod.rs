@@ -233,18 +233,44 @@ pub async fn render_project(
             tts_durations.push(None);
             continue;
         }
-        let engine = tts_engine.as_ref().unwrap();
         let wav_path = temp_dir.path().join(format!("scene-{i:03}.wav"));
-        let voice = scene
-            .frontmatter
-            .voice
-            .as_deref()
+
+        // Determine per-scene engine/voice/speed overrides
+        let scene_voice_cfg = scene.frontmatter.voice.as_ref();
+        let scene_engine_override = scene_voice_cfg.and_then(|v| v.engine.as_deref());
+        let voice = scene_voice_cfg
+            .and_then(|v| v.voice_name())
             .or(config.voice.default_voice.as_deref());
+        let speed = scene_voice_cfg
+            .and_then(|v| v.speed)
+            .unwrap_or(config.voice.speed);
+
+        // Use a per-scene engine if the scene overrides the engine, otherwise use the project engine
+        let scene_engine: Option<Box<dyn tts::TtsEngine>>;
+        let effective_engine: &dyn tts::TtsEngine = if let Some(engine_name) = scene_engine_override {
+            let mut voice_cfg = config.voice.clone();
+            voice_cfg.engine = engine_name.to_string();
+            match tts::create_engine(&voice_cfg) {
+                Ok(eng) => {
+                    scene_engine = Some(eng);
+                    scene_engine.as_ref().unwrap().as_ref()
+                }
+                Err(e) => {
+                    eprintln!("  TTS scene {}: engine '{}' failed ({}), using default", i + 1, engine_name, e);
+                    scene_engine = None;
+                    tts_engine.as_ref().unwrap().as_ref()
+                }
+            }
+        } else {
+            scene_engine = None;
+            tts_engine.as_ref().unwrap().as_ref()
+        };
+
         match tts::cache::synthesize_cached(
-            engine.as_ref(),
+            effective_engine,
             script,
             voice,
-            config.voice.speed,
+            speed,
             &wav_path,
             project_path,
         ) {

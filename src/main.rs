@@ -37,7 +37,7 @@ async fn main() {
 
 async fn run(cli: Cli) -> VidgenResult<()> {
     match cli.command {
-        Command::Init { path } => commands::init::run(&path),
+        Command::Init { path, preset } => commands::init::run(&path, preset.as_deref()),
         Command::Asset { action } => {
             match action {
                 cli::AssetAction::Add {

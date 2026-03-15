@@ -297,19 +297,238 @@ quality = "{quality}"
     })
 }
 
+/// Build `CreateProjectOptions` from a named preset.
+fn apply_preset(preset: &str, path: &Path) -> VidgenResult<CreateProjectOptions> {
+    match preset {
+        "short" | "short-9x16" => Ok(CreateProjectOptions {
+            path: path.to_path_buf(),
+            name: None,
+            fps: Some(30),
+            width: Some(1080),
+            height: Some(1920),
+            quality: Some("standard".into()),
+            voice: None,
+            formats: None,
+            theme: Some(ThemeOverrides {
+                primary: Some("#FF6B6B".into()),
+                secondary: Some("#4ECDC4".into()),
+                background: Some("#1A1A2E".into()),
+                text: Some("#FFFFFF".into()),
+                font_heading: Some("Inter".into()),
+                font_body: Some("Inter".into()),
+            }),
+            scenes: Some(vec![
+                SceneInput {
+                    template: Some("title-card".into()),
+                    script: "Hook your audience in the first 3 seconds!".into(),
+                    duration: Some(SceneDuration::Fixed(3.0)),
+                    props: Some([
+                        ("title".into(), serde_json::json!("Your Hook Here")),
+                        ("subtitle".into(), serde_json::json!("Grab attention fast")),
+                    ].into_iter().collect()),
+                    transition: Some("fade".into()),
+                    voice: None,
+                    background: None,
+                },
+                SceneInput {
+                    template: Some("content-text".into()),
+                    script: "Deliver your main message clearly and concisely.".into(),
+                    duration: None,
+                    props: Some([
+                        ("heading".into(), serde_json::json!("The Key Point")),
+                        ("body".into(), serde_json::json!("Keep it short and impactful for vertical video.")),
+                    ].into_iter().collect()),
+                    transition: Some("slide-left".into()),
+                    voice: None,
+                    background: None,
+                },
+                SceneInput {
+                    template: Some("cta-card".into()),
+                    script: "Don't forget to follow for more!".into(),
+                    duration: Some(SceneDuration::Fixed(4.0)),
+                    props: Some([
+                        ("heading".into(), serde_json::json!("Follow for More!")),
+                        ("items".into(), serde_json::json!(["Like", "Comment", "Share"])),
+                    ].into_iter().collect()),
+                    transition: Some("fade".into()),
+                    voice: None,
+                    background: None,
+                },
+            ]),
+        }),
+        "recap" | "recap-16x9" => Ok(CreateProjectOptions {
+            path: path.to_path_buf(),
+            name: None,
+            fps: Some(30),
+            width: Some(1920),
+            height: Some(1080),
+            quality: Some("standard".into()),
+            voice: None,
+            formats: None,
+            theme: Some(ThemeOverrides {
+                primary: Some("#3B82F6".into()),
+                secondary: Some("#8B5CF6".into()),
+                background: Some("#111827".into()),
+                text: Some("#F9FAFB".into()),
+                font_heading: Some("Inter".into()),
+                font_body: Some("Inter".into()),
+            }),
+            scenes: Some(vec![
+                SceneInput {
+                    template: Some("title-card".into()),
+                    script: "Welcome to this week's recap.".into(),
+                    duration: Some(SceneDuration::Fixed(5.0)),
+                    props: Some([
+                        ("title".into(), serde_json::json!("Weekly Recap")),
+                        ("subtitle".into(), serde_json::json!("Week of March 10, 2026")),
+                    ].into_iter().collect()),
+                    transition: Some("fade".into()),
+                    voice: None,
+                    background: None,
+                },
+                SceneInput {
+                    template: Some("content-text".into()),
+                    script: "First, let's look at the highlights.".into(),
+                    duration: None,
+                    props: Some([
+                        ("heading".into(), serde_json::json!("Highlights")),
+                        ("body".into(), serde_json::json!("Summarize the key events and achievements of the week.")),
+                    ].into_iter().collect()),
+                    transition: Some("slide-left".into()),
+                    voice: None,
+                    background: None,
+                },
+                SceneInput {
+                    template: Some("split-screen".into()),
+                    script: "Let's compare this week with last week.".into(),
+                    duration: None,
+                    props: Some([
+                        ("panels".into(), serde_json::json!([
+                            {"label": "This Week", "content": "Key metrics and progress"},
+                            {"label": "Last Week", "content": "Previous metrics for comparison"}
+                        ])),
+                    ].into_iter().collect()),
+                    transition: None,
+                    voice: None,
+                    background: None,
+                },
+                SceneInput {
+                    template: Some("cta-card".into()),
+                    script: "That's all for this week. See you next time!".into(),
+                    duration: Some(SceneDuration::Fixed(5.0)),
+                    props: Some([
+                        ("heading".into(), serde_json::json!("See You Next Week!")),
+                        ("items".into(), serde_json::json!(["Subscribe", "Share", "Stay tuned"])),
+                    ].into_iter().collect()),
+                    transition: Some("fade".into()),
+                    voice: None,
+                    background: None,
+                },
+            ]),
+        }),
+        "educational" => Ok(CreateProjectOptions {
+            path: path.to_path_buf(),
+            name: None,
+            fps: Some(30),
+            width: Some(1920),
+            height: Some(1080),
+            quality: Some("high".into()),
+            voice: None,
+            formats: None,
+            theme: Some(ThemeOverrides {
+                primary: Some("#10B981".into()),
+                secondary: Some("#6366F1".into()),
+                background: Some("#0F172A".into()),
+                text: Some("#E2E8F0".into()),
+                font_heading: Some("Inter".into()),
+                font_body: Some("Inter".into()),
+            }),
+            scenes: Some(vec![
+                SceneInput {
+                    template: Some("title-card".into()),
+                    script: "Welcome to this tutorial. Today we'll learn something new.".into(),
+                    duration: None,
+                    props: Some([
+                        ("title".into(), serde_json::json!("Tutorial Title")),
+                        ("subtitle".into(), serde_json::json!("A Step-by-Step Guide")),
+                    ].into_iter().collect()),
+                    transition: Some("fade".into()),
+                    voice: None,
+                    background: None,
+                },
+                SceneInput {
+                    template: Some("content-text".into()),
+                    script: "Let's start with the basics. Understanding the fundamentals is key.".into(),
+                    duration: None,
+                    props: Some([
+                        ("heading".into(), serde_json::json!("1. The Basics")),
+                        ("body".into(), serde_json::json!("Start with a clear explanation of the foundational concepts.")),
+                    ].into_iter().collect()),
+                    transition: Some("slide-left".into()),
+                    voice: None,
+                    background: None,
+                },
+                SceneInput {
+                    template: Some("content-text".into()),
+                    script: "Now let's dive deeper into the details.".into(),
+                    duration: None,
+                    props: Some([
+                        ("heading".into(), serde_json::json!("2. Deep Dive")),
+                        ("body".into(), serde_json::json!("Explain the more complex aspects with examples.")),
+                    ].into_iter().collect()),
+                    transition: Some("slide-left".into()),
+                    voice: None,
+                    background: None,
+                },
+                SceneInput {
+                    template: Some("quote-card".into()),
+                    script: "Remember this important takeaway.".into(),
+                    duration: None,
+                    props: Some([
+                        ("quote".into(), serde_json::json!("The best way to learn is by doing.")),
+                        ("author".into(), serde_json::json!("A Wise Teacher")),
+                    ].into_iter().collect()),
+                    transition: Some("fade".into()),
+                    voice: None,
+                    background: None,
+                },
+                SceneInput {
+                    template: Some("cta-card".into()),
+                    script: "Let's recap what we've learned today.".into(),
+                    duration: None,
+                    props: Some([
+                        ("heading".into(), serde_json::json!("Key Takeaways")),
+                        ("items".into(), serde_json::json!(["Concept 1: The basics", "Concept 2: The details", "Practice makes perfect"])),
+                    ].into_iter().collect()),
+                    transition: Some("fade".into()),
+                    voice: None,
+                    background: None,
+                },
+            ]),
+        }),
+        other => Err(VidgenError::Other(format!(
+            "Unknown preset \"{other}\". Available presets: short, recap, educational"
+        ))),
+    }
+}
+
 /// CLI entry point — delegates to `create_project()`.
-pub fn run(path: &Path) -> VidgenResult<()> {
-    let opts = CreateProjectOptions {
-        path: path.to_path_buf(),
-        name: None,
-        fps: None,
-        width: None,
-        height: None,
-        quality: None,
-        voice: None,
-        formats: None,
-        theme: None,
-        scenes: None,
+pub fn run(path: &Path, preset: Option<&str>) -> VidgenResult<()> {
+    let opts = if let Some(preset_name) = preset {
+        apply_preset(preset_name, path)?
+    } else {
+        CreateProjectOptions {
+            path: path.to_path_buf(),
+            name: None,
+            fps: None,
+            width: None,
+            height: None,
+            quality: None,
+            voice: None,
+            formats: None,
+            theme: None,
+            scenes: None,
+        }
     };
     let result = create_project(&opts)?;
 
@@ -613,5 +832,72 @@ mod tests {
                 .and_then(|bg| bg.color.as_deref()),
             Some("#FF0000")
         );
+    }
+
+    #[test]
+    fn test_preset_short() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_path = dir.path().join("short-project");
+        let opts = apply_preset("short", &project_path).unwrap();
+        let result = create_project(&opts).unwrap();
+        assert_eq!(result.scenes_created, 3);
+
+        let config = crate::config::load_config(&project_path).unwrap();
+        assert_eq!(config.video.width, 1080);
+        assert_eq!(config.video.height, 1920);
+        assert_eq!(config.theme.primary, "#FF6B6B");
+
+        let scenes = crate::scene::load_scenes(&project_path).unwrap();
+        assert_eq!(scenes.len(), 3);
+        assert_eq!(scenes[0].frontmatter.template, "title-card");
+        assert_eq!(scenes[2].frontmatter.template, "cta-card");
+    }
+
+    #[test]
+    fn test_preset_recap() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_path = dir.path().join("recap-project");
+        let opts = apply_preset("recap", &project_path).unwrap();
+        let result = create_project(&opts).unwrap();
+        assert_eq!(result.scenes_created, 4);
+
+        let config = crate::config::load_config(&project_path).unwrap();
+        assert_eq!(config.video.width, 1920);
+        assert_eq!(config.video.height, 1080);
+
+        let scenes = crate::scene::load_scenes(&project_path).unwrap();
+        assert_eq!(scenes.len(), 4);
+        assert_eq!(scenes[2].frontmatter.template, "split-screen");
+    }
+
+    #[test]
+    fn test_preset_educational() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_path = dir.path().join("edu-project");
+        let opts = apply_preset("educational", &project_path).unwrap();
+        let result = create_project(&opts).unwrap();
+        assert_eq!(result.scenes_created, 5);
+
+        let config = crate::config::load_config(&project_path).unwrap();
+        assert_eq!(config.output.quality, "high");
+
+        let scenes = crate::scene::load_scenes(&project_path).unwrap();
+        assert_eq!(scenes.len(), 5);
+        assert_eq!(scenes[3].frontmatter.template, "quote-card");
+    }
+
+    #[test]
+    fn test_preset_unknown() {
+        let result = apply_preset("nonexistent", Path::new("/tmp/test"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_preset_alias() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_path = dir.path().join("alias-test");
+        let opts = apply_preset("short-9x16", &project_path).unwrap();
+        assert_eq!(opts.width, Some(1080));
+        assert_eq!(opts.height, Some(1920));
     }
 }

@@ -49,6 +49,10 @@ pub enum Command {
     Init {
         /// Path to create the project directory
         path: PathBuf,
+
+        /// Project preset: short (9:16 vertical), recap (16:9 landscape), educational (long-form)
+        #[arg(long)]
+        preset: Option<String>,
     },
     /// Start an MCP server over stdio for AI agent integration
     Mcp,

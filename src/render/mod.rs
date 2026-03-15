@@ -442,6 +442,18 @@ pub async fn render_project(
             .map(|s| apply_format_overrides(s, fmt_name))
             .collect();
 
+        // Resolve project-wide background music (if configured)
+        let project_bg_music = config.audio.background.as_ref().map(|bg| {
+            crate::scene::resolve_asset_path(&bg.file, project_path)
+        });
+        let project_bg_volume = config.audio.background.as_ref()
+            .map(|bg| {
+                // Convert dB to linear volume (0.0-1.0 range)
+                // -12dB ≈ 0.25, -6dB ≈ 0.5, 0dB = 1.0
+                10.0_f64.powf(bg.volume / 20.0)
+            })
+            .unwrap_or(0.25);
+
         // Pre-compute per-scene data (output paths, audio paths, music paths)
         let scene_prep: Vec<_> = fmt_scenes
             .iter()
@@ -449,18 +461,20 @@ pub async fn render_project(
             .map(|(i, scene)| {
                 let scene_output = fmt_temp_dir.join(format!("scene-{i:03}.mp4"));
                 let audio = audio_paths[i].clone();
+                // Scene-level music overrides project-level background music
                 let music = scene
                     .frontmatter
                     .audio
                     .as_ref()
                     .and_then(|a| a.music.as_deref())
-                    .map(|m| crate::scene::resolve_asset_path(m, project_path));
+                    .map(|m| crate::scene::resolve_asset_path(m, project_path))
+                    .or_else(|| project_bg_music.clone());
                 let music_volume = scene
                     .frontmatter
                     .audio
                     .as_ref()
                     .and_then(|a| a.music_volume)
-                    .unwrap_or(0.3);
+                    .unwrap_or(project_bg_volume);
                 (scene_output, audio, music, music_volume)
             })
             .collect();
@@ -578,6 +592,20 @@ pub async fn render_project(
             &output_path,
             &platform,
         )?;
+
+        // Apply audio fades if project-level background music has fade config
+        if let Some(ref bg) = config.audio.background {
+            let total_video_dur: f64 = effective_durations.iter().sum();
+            if bg.fade_in > 0.0 || bg.fade_out > 0.0 {
+                eprintln!(
+                    "{} Applying audio fades (in: {:.1}s, out: {:.1}s)...",
+                    "render:".cyan().bold(),
+                    bg.fade_in,
+                    bg.fade_out
+                );
+                encoder::apply_audio_fades(&output_path, total_video_dur, bg.fade_in, bg.fade_out)?;
+            }
+        }
 
         eprintln!(
             "{} Output: {}",
@@ -741,6 +769,7 @@ mod tests {
             voice: VoiceConfig::default(),
             theme: ThemeConfig::default(),
             output: OutputConfig::default(),
+            audio: crate::config::AudioConfig::default(),
         };
         let result = resolve_formats(&config, None);
         assert_eq!(result.len(), 2);
@@ -767,6 +796,7 @@ mod tests {
             voice: VoiceConfig::default(),
             theme: ThemeConfig::default(),
             output: OutputConfig::default(),
+            audio: crate::config::AudioConfig::default(),
         };
         let result = resolve_formats(&config, None);
         assert_eq!(result.len(), 1);
@@ -819,6 +849,7 @@ mod tests {
             voice: VoiceConfig::default(),
             theme: ThemeConfig::default(),
             output: OutputConfig::default(),
+            audio: crate::config::AudioConfig::default(),
         };
         let filter = vec!["portrait".into(), "square".into()];
         let result = resolve_formats(&config, Some(&filter));

@@ -33,17 +33,26 @@ Chromium and FFmpeg are auto-downloaded on first run.
 ## Quick start
 
 ```bash
+# Create a project from a preset (short, recap, educational)
+vidgen init ./my-video --preset short
+
 # Render a project
 vidgen render ./my-project/
 
-# Preview a single scene
-vidgen preview --scene 3 ./my-project/
+# Preview all scenes as thumbnails
+vidgen preview ./my-project/ --all
+
+# Preview a single scene as animated GIF
+vidgen preview ./my-project/ --scene 2 --gif
 
 # Watch mode for live iteration
 vidgen watch ./my-project/
 
 # Quick render from stdin
 echo "Hello world" | vidgen quickrender --voice en_US-amy-medium -o hello.mp4
+
+# Add assets to a project
+vidgen asset add ./photo.jpg -p ./my-project/ -c images
 ```
 
 ## Project structure
@@ -75,9 +84,13 @@ template: title-card
 duration: auto
 transition_in: fade
 props:
-  title: "My Video Title"
+  title: "My Video Title 🚀"
   subtitle: "A subtitle"
   title_animation: fade-up
+voice:
+  engine: edge
+  voice: "de-DE-ConradNeural"
+  speed: 1.1
 audio:
   music: "@assets/audio/ambient.mp3"
   music_volume: 0.15
@@ -86,6 +99,8 @@ audio:
 This is the voiceover script. When duration is set to "auto",
 the scene length is derived from the TTS audio length.
 ```
+
+Per-scene voice config supports both simple (`voice: "en-US-JennyNeural"`) and structured form with engine/speed overrides. Emoji characters are automatically rendered via Twemoji CDN.
 
 ## Built-in templates
 
@@ -147,13 +162,14 @@ Platform-specific encoding presets handle codec, bitrate, and file size constrai
 
 ## Examples
 
-The `examples/` directory contains three projects:
+The `examples/` directory contains four projects:
 
 | Example | Description |
 |---------|-------------|
 | [`examples/minimal/`](examples/minimal/) | Bare-minimum 2-scene project — the simplest thing that works |
 | [`examples/intro/`](examples/intro/) | 7-scene intro video with multi-format output (landscape, portrait, square) |
 | [`examples/showcase/`](examples/showcase/) | 14 scenes demonstrating every built-in template, custom components, and features (subtitles, format overrides, parallel rendering) |
+| [`examples/features-test/`](examples/features-test/) | 6 scenes testing emoji rendering, per-scene voice config, custom components, and asset management |
 
 ```bash
 # Render the minimal example
@@ -161,7 +177,24 @@ vidgen render examples/minimal/
 
 # Render the showcase in all three formats
 vidgen render examples/showcase/
+
+# Preview all scenes of the features test
+vidgen preview examples/features-test/ --all
 ```
+
+## Background music
+
+Project-wide background music can be configured in `project.toml`:
+
+```toml
+[audio.background]
+file = "@assets/audio/ambient.mp3"
+volume = -12        # dB relative to voice
+fade_in = 2.0       # seconds
+fade_out = 3.0      # seconds
+```
+
+Per-scene music overrides the project default via `audio.music` in scene frontmatter.
 
 ## Asset references
 

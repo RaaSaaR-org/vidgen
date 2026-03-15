@@ -30,11 +30,11 @@ MCP Client → MCP Server (rmcp/stdio) → Project FS (markdown + HTML/CSS) → 
 
 ### Key subsystems
 
-- **CLI layer** — `clap` v4 subcommands: `init`, `render`, `preview`, `watch`, `quickrender` (alias `qr`), `mcp`
+- **CLI layer** — `clap` v4 subcommands: `init` (with `--preset`), `render` (with `--force-tts`), `preview` (with `--all`, `--gif`), `watch`, `quickrender` (alias `qr`), `asset add`, `mcp`
 - **MCP server** — `rmcp` crate, stdio transport, 10 tools (see prd.md §4). Batch-first design: `create_project` accepts inline scenes array for single-call video creation
 - **Scene parser** — `pulldown-cmark` + `serde_yaml` for markdown/frontmatter; `toml` for project.toml
 - **Template engine** — `handlebars` (v6) for `{{variable}}` injection into HTML templates. 9 built-in templates with CSS `@container` queries for multi-format adaptation. No browser-side framework
-- **Render engine** — `chromiumoxide` with `--run-all-compositor-stages-before-draw` flag. Uses CSS custom properties (`--frame`, `--total-frames`, `--progress`) injected per frame + `Page.captureScreenshot` polling (no `HeadlessExperimental.beginFrame` on macOS). PNG bytes piped to FFmpeg via `image2pipe` (no intermediate frame files)
+- **Render engine** — `chromiumoxide` with `--run-all-compositor-stages-before-draw` and `--allow-file-access-from-files` flags. Uses CSS custom properties (`--frame`, `--total-frames`, `--progress`) injected per frame + `Page.captureScreenshot` polling (no `HeadlessExperimental.beginFrame` on macOS). PNG bytes piped to FFmpeg via `image2pipe` (no intermediate frame files). Injects `<base href="file://...">` for local asset resolution and Twemoji CDN for emoji rendering
 - **TTS engine** — Trait-based abstraction (`TtsEngine` trait) with implementations: `NativeTtsEngine` (macOS `say` / Linux `espeak-ng`), `EdgeTtsEngine` (`edge-tts` CLI), `PiperTtsEngine` (local neural via ONNX), `ElevenLabsTtsEngine` (`ureq`). All return `SynthesisResult` (audio path + duration + optional `WordTimestamp`) for kinetic text sync
 - **Audio/video encoding** — `ffmpeg-sidecar` or subprocess. Platform-specific presets (CRF, codec, bitrate). `adelay` filter for per-scene audio offset. Multi-format: re-renders with different viewport dimensions
 - **Concurrency** — tokio async runtime. Producer-consumer channel between frame capture and FFmpeg. Parallel scene rendering (separate Chromium tabs), concatenated via FFmpeg concat demuxer
@@ -53,7 +53,7 @@ my-video/
 
 ### Scene frontmatter key fields
 
-`template` (component name), `duration` (auto/explicit), `transition_in`/`transition_out`, `background`, `props` (template variables), `audio` (music, volume), `voice` (override), `format_overrides`
+`template` (component name), `duration` (auto/explicit), `transition_in`/`transition_out`, `background`, `props` (template variables), `audio` (music, volume), `voice` (string or `{engine, voice, speed}` struct), `format_overrides`
 
 ### Asset reference conventions
 
@@ -92,3 +92,10 @@ my-video/
 - Config validation runs at load time — rejects out-of-range fps, dimensions, speed, padding, and parallel_scenes values
 - Animated frame rendering loads HTML into the page once, then updates CSS custom properties per frame via JS injection (no repeated `set_content` calls)
 - Structured logging via `tracing` crate, gated on `RUST_LOG` env var, writes to stderr. Disabled for MCP mode to avoid corrupting stdio JSON
+- Emoji detection auto-injects Twemoji CDN script into HTML (no-op when no emoji present)
+- `<base href="file://...">` tag injected for local asset resolution in headless Chromium
+- `@assets/` prefixes in template prop values resolved to absolute `file://` URLs
+- Per-scene voice config: `SceneVoiceConfig` supports both string (backward-compatible) and `{engine, voice, speed}` struct via custom serde deserializer
+- Project-wide `[audio.background]` config with dB volume, fade_in, fade_out; per-scene audio.music overrides project default
+- TTS audio files copied to `output/audio/` with readable scene names after synthesis
+- CLI render progress bar (`[████░░░░] 50%`) and timing report after completion

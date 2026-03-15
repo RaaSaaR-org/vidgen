@@ -26,6 +26,7 @@ pub async fn render_project(
     subtitles_override: Option<bool>,
     burn_in_override: Option<bool>,
     parallel_override: Option<usize>,
+    force_tts: bool,
 ) -> VidgenResult<Vec<RenderResult>> {
     if !path.exists() {
         return Err(VidgenError::ProjectNotFound(path.to_path_buf()));
@@ -86,6 +87,7 @@ pub async fn render_project(
         path,
         crate::render::RenderProgress::noop(),
         format_filter,
+        force_tts,
     )
     .await?;
 
@@ -152,6 +154,7 @@ pub async fn render_project_with_progress(
         path,
         progress,
         format_filter,
+        false, // MCP doesn't support force_tts yet
     )
     .await?;
 
@@ -181,6 +184,7 @@ pub async fn run(
     subtitles: bool,
     burn_in: bool,
     parallel: Option<usize>,
+    force_tts: bool,
 ) -> VidgenResult<()> {
     let subtitles_override = if subtitles { Some(true) } else { None };
     let burn_in_override = if burn_in { Some(true) } else { None };
@@ -193,6 +197,7 @@ pub async fn run(
         subtitles_override,
         burn_in_override,
         parallel,
+        force_tts,
     )
     .await?;
     for r in &results {

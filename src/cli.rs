@@ -90,6 +90,10 @@ pub enum Command {
         /// Maximum number of scenes to render in parallel (default: 4)
         #[arg(long)]
         parallel: Option<usize>,
+
+        /// Force TTS regeneration, ignoring cached audio files
+        #[arg(long)]
+        force_tts: bool,
     },
     /// Preview a single frame of a scene as a PNG image
     Preview {

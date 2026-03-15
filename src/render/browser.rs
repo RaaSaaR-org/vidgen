@@ -246,13 +246,19 @@ pub async fn capture_scene_frames(
         // Pipe PNG bytes to encoder
         encoder.write_frame(&screenshot)?;
 
-        // Progress reporting
+        // Progress reporting with visual bar
         if (frame + 1) % 30 == 0 || frame + 1 == total_frames {
+            let pct = (frame + 1) as f64 / total_frames as f64;
+            let bar_width = 20;
+            let filled = (pct * bar_width as f64) as usize;
+            let empty = bar_width - filled;
             eprint!(
-                "\r    Frame {}/{} ({:.0}%)",
+                "\r    [{}{}] {:.0}% ({}/{})",
+                "█".repeat(filled),
+                "░".repeat(empty),
+                pct * 100.0,
                 frame + 1,
                 total_frames,
-                (frame + 1) as f64 / total_frames as f64 * 100.0
             );
         }
     }

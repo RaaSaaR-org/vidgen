@@ -564,6 +564,54 @@ pub fn burn_in_subtitles(video_path: &Path, srt_path: &Path) -> VidgenResult<()>
     Ok(())
 }
 
+/// Apply audio fade-in and/or fade-out to a video file (post-process).
+/// Used for project-wide background music fades.
+pub fn apply_audio_fades(
+    video_path: &Path,
+    total_duration: f64,
+    fade_in: f64,
+    fade_out: f64,
+) -> VidgenResult<()> {
+    if fade_in <= 0.0 && fade_out <= 0.0 {
+        return Ok(());
+    }
+
+    let tmp_path = video_path.with_extension("fade-tmp.mp4");
+    std::fs::rename(video_path, &tmp_path)?;
+
+    let mut filter_parts = Vec::new();
+    if fade_in > 0.0 {
+        filter_parts.push(format!("afade=t=in:st=0:d={fade_in:.2}"));
+    }
+    if fade_out > 0.0 {
+        let start = (total_duration - fade_out).max(0.0);
+        filter_parts.push(format!("afade=t=out:st={start:.2}:d={fade_out:.2}"));
+    }
+    let af = filter_parts.join(",");
+
+    let output = Command::new("ffmpeg")
+        .args(["-y", "-i"])
+        .arg(tmp_path.as_os_str())
+        .args(["-c:v", "copy", "-af", &af])
+        .arg(video_path.as_os_str())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| VidgenError::Ffmpeg(format!("Failed to spawn ffmpeg fade: {e}")))?;
+
+    let _ = std::fs::remove_file(&tmp_path);
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(VidgenError::Ffmpeg(format!(
+            "FFmpeg audio fade failed: {}",
+            stderr.lines().last().unwrap_or("unknown error")
+        )));
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

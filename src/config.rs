@@ -15,6 +15,35 @@ pub struct ProjectConfig {
     pub theme: ThemeConfig,
     #[serde(default)]
     pub output: OutputConfig,
+    #[serde(default)]
+    pub audio: AudioConfig,
+}
+
+/// Project-wide audio configuration (background music, etc.)
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct AudioConfig {
+    #[serde(default)]
+    pub background: Option<BackgroundMusicConfig>,
+}
+
+/// Background music configuration for the entire project.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BackgroundMusicConfig {
+    /// Path to the background music file (supports @assets/ prefix)
+    pub file: String,
+    /// Volume in dB relative to voice (default: -12)
+    #[serde(default = "default_bg_volume")]
+    pub volume: f64,
+    /// Fade-in duration in seconds (default: 0)
+    #[serde(default)]
+    pub fade_in: f64,
+    /// Fade-out duration in seconds (default: 0)
+    #[serde(default)]
+    pub fade_out: f64,
+}
+
+fn default_bg_volume() -> f64 {
+    -12.0
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -611,6 +640,7 @@ name = "Minimal"
             },
             theme: ThemeConfig::default(),
             output: OutputConfig::default(),
+            audio: AudioConfig::default(),
         };
         save_config(project_path, &config).unwrap();
         let loaded = load_config(project_path).unwrap();
@@ -635,6 +665,7 @@ name = "Minimal"
             voice: VoiceConfig::default(),
             theme: ThemeConfig::default(),
             output: OutputConfig::default(),
+            audio: AudioConfig::default(),
         };
         save_config(project_path, &config).unwrap();
 
@@ -715,6 +746,7 @@ fps = 30
             voice: VoiceConfig::default(),
             theme: ThemeConfig::default(),
             output: OutputConfig::default(),
+            audio: AudioConfig::default(),
         };
         save_config(project_path, &config).unwrap();
 
@@ -937,6 +969,7 @@ name = "No Parallel"
             voice: VoiceConfig::default(),
             theme: ThemeConfig::default(),
             output: OutputConfig::default(),
+            audio: AudioConfig::default(),
         };
         assert!(config.validate().is_ok());
     }
@@ -955,6 +988,7 @@ name = "No Parallel"
             voice: VoiceConfig::default(),
             theme: ThemeConfig::default(),
             output: OutputConfig::default(),
+            audio: AudioConfig::default(),
         };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("Invalid fps: 0"));
@@ -974,6 +1008,7 @@ name = "No Parallel"
             voice: VoiceConfig::default(),
             theme: ThemeConfig::default(),
             output: OutputConfig::default(),
+            audio: AudioConfig::default(),
         };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("Invalid fps: 300"));
@@ -993,6 +1028,7 @@ name = "No Parallel"
             },
             theme: ThemeConfig::default(),
             output: OutputConfig::default(),
+            audio: AudioConfig::default(),
         };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("padding_before"));
@@ -1012,6 +1048,7 @@ name = "No Parallel"
             },
             theme: ThemeConfig::default(),
             output: OutputConfig::default(),
+            audio: AudioConfig::default(),
         };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("voice speed"));
@@ -1031,6 +1068,7 @@ name = "No Parallel"
             voice: VoiceConfig::default(),
             theme: ThemeConfig::default(),
             output: OutputConfig::default(),
+            audio: AudioConfig::default(),
         };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("parallel_scenes"));
@@ -1060,6 +1098,7 @@ name = "No Parallel"
             voice: VoiceConfig::default(),
             theme: ThemeConfig::default(),
             output: OutputConfig::default(),
+            audio: AudioConfig::default(),
         };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("width 0"));
@@ -1084,5 +1123,58 @@ name = "No Parallel"
         let p = resolve_encoding(&standard, None);
         assert_eq!(p.crf, 23);
         assert_eq!(p.audio_bitrate, "128k");
+    }
+
+    #[test]
+    fn test_background_music_config_parsing() {
+        let toml_content = r##"
+[project]
+name = "Music Test"
+
+[audio.background]
+file = "@assets/audio/bg-music.mp3"
+volume = -12
+fade_in = 2.0
+fade_out = 3.0
+"##;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("project.toml"), toml_content).unwrap();
+        let config = load_config(dir.path()).unwrap();
+        let bg = config.audio.background.unwrap();
+        assert_eq!(bg.file, "@assets/audio/bg-music.mp3");
+        assert_eq!(bg.volume, -12.0);
+        assert_eq!(bg.fade_in, 2.0);
+        assert_eq!(bg.fade_out, 3.0);
+    }
+
+    #[test]
+    fn test_background_music_config_defaults() {
+        let toml_content = r##"
+[project]
+name = "Music Default Test"
+
+[audio.background]
+file = "music.mp3"
+"##;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("project.toml"), toml_content).unwrap();
+        let config = load_config(dir.path()).unwrap();
+        let bg = config.audio.background.unwrap();
+        assert_eq!(bg.file, "music.mp3");
+        assert_eq!(bg.volume, -12.0); // default
+        assert_eq!(bg.fade_in, 0.0);  // default
+        assert_eq!(bg.fade_out, 0.0); // default
+    }
+
+    #[test]
+    fn test_no_background_music() {
+        let toml_content = r#"
+[project]
+name = "No Music"
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("project.toml"), toml_content).unwrap();
+        let config = load_config(dir.path()).unwrap();
+        assert!(config.audio.background.is_none());
     }
 }

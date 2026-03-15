@@ -6,6 +6,53 @@ use serde_json::json;
 use std::path::Path;
 use tracing::{debug, trace};
 
+/// Resolve `@assets/...` prefixes in a JSON value to absolute `file://` URLs.
+/// Only transforms string values; recurses into arrays and objects.
+fn resolve_asset_values(value: &mut serde_json::Value, project_path: &Path) {
+    match value {
+        serde_json::Value::String(s) => {
+            if let Some(suffix) = s.strip_prefix("@assets/") {
+                let abs = project_path.join("assets").join(suffix);
+                *s = format!("file://{}", abs.display());
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                resolve_asset_values(item, project_path);
+            }
+        }
+        serde_json::Value::Object(obj) => {
+            for (_k, v) in obj.iter_mut() {
+                resolve_asset_values(v, project_path);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Inject a `<base href="file:///project/path/">` tag into an HTML string,
+/// enabling relative asset paths (images, fonts, CSS) to resolve correctly
+/// when loaded via `page.set_content()` in headless Chromium.
+fn inject_base_tag(html: &str, project_path: &Path) -> String {
+    let base_url = format!("file://{}/", project_path.display());
+    let base_tag = format!("<base href=\"{base_url}\">");
+    // Insert after <head> or <head ...>
+    if let Some(pos) = html.find("<head>") {
+        let insert_pos = pos + "<head>".len();
+        format!("{}{}{}", &html[..insert_pos], base_tag, &html[insert_pos..])
+    } else if let Some(pos) = html.find("<head ") {
+        // Find the closing > of <head ...>
+        if let Some(close) = html[pos..].find('>') {
+            let insert_pos = pos + close + 1;
+            format!("{}{}{}", &html[..insert_pos], base_tag, &html[insert_pos..])
+        } else {
+            html.to_string()
+        }
+    } else {
+        html.to_string()
+    }
+}
+
 const TITLE_CARD_TEMPLATE: &str = include_str!("templates/title-card.html");
 const CONTENT_TEXT_TEMPLATE: &str = include_str!("templates/content-text.html");
 const QUOTE_CARD_TEMPLATE: &str = include_str!("templates/quote-card.html");
@@ -79,6 +126,9 @@ impl<'a> TemplateRegistry<'a> {
     /// Render a scene to a full HTML document string.
     ///
     /// `frame` and `total_frames` are injected for CSS custom property animation.
+    /// If `project_path` is provided, asset references (`@assets/...`) in props are
+    /// resolved to absolute `file://` URLs and a `<base>` tag is injected so that
+    /// relative paths in templates work correctly in headless Chromium.
     pub fn render_scene_html(
         &self,
         scene: &Scene,
@@ -87,6 +137,7 @@ impl<'a> TemplateRegistry<'a> {
         height: u32,
         frame: u32,
         total_frames: u32,
+        project_path: Option<&Path>,
     ) -> VidgenResult<String> {
         let template_name = &scene.frontmatter.template;
         trace!(
@@ -127,6 +178,11 @@ impl<'a> TemplateRegistry<'a> {
             for (key, value) in &scene.frontmatter.props {
                 obj.insert(key.clone(), value.clone());
             }
+        }
+
+        // Resolve @assets/ prefixes in prop values to file:// URLs
+        if let Some(pp) = project_path {
+            resolve_asset_values(&mut data, pp);
         }
 
         // Inject defaults for lower-third template
@@ -229,9 +285,16 @@ impl<'a> TemplateRegistry<'a> {
             }
         }
 
-        self.hbs
+        let html = self.hbs
             .render(template_name, &data)
-            .map_err(|e| VidgenError::TemplateRender(e.to_string()))
+            .map_err(|e| VidgenError::TemplateRender(e.to_string()))?;
+
+        // Inject <base> tag for file:// asset resolution in headless Chromium
+        if let Some(pp) = project_path {
+            Ok(inject_base_tag(&html, pp))
+        } else {
+            Ok(html)
+        }
     }
 }
 
@@ -258,7 +321,7 @@ mod tests {
         let content = "---\ntemplate: title-card\nduration: 5\nprops:\n  title: \"Hello World\"\n  subtitle: \"Testing\"\n---\nScript.";
         let scene = parse_scene(content, Path::new("test.md")).unwrap();
         let html = registry
-            .render_scene_html(&scene, &test_theme(), 1920, 1080, 0, 150)
+            .render_scene_html(&scene, &test_theme(), 1920, 1080, 0, 150, None)
             .unwrap();
         assert!(html.contains("Hello World"));
         assert!(html.contains("Testing"));
@@ -273,7 +336,7 @@ mod tests {
         let content = "---\ntemplate: content-text\nprops:\n  heading: \"Chapter 1\"\n  body: \"Some content here\"\n---\nVoiceover.";
         let scene = parse_scene(content, Path::new("test.md")).unwrap();
         let html = registry
-            .render_scene_html(&scene, &test_theme(), 1920, 1080, 75, 150)
+            .render_scene_html(&scene, &test_theme(), 1920, 1080, 75, 150, None)
             .unwrap();
         assert!(html.contains("Chapter 1"));
         assert!(html.contains("Some content here"));
@@ -292,7 +355,7 @@ props:
 Voiceover."#;
         let scene = parse_scene(content, Path::new("test.md")).unwrap();
         let html = registry
-            .render_scene_html(&scene, &test_theme(), 1920, 1080, 75, 150)
+            .render_scene_html(&scene, &test_theme(), 1920, 1080, 75, 150, None)
             .unwrap();
         assert!(html.contains("The only way to do great work"));
         assert!(html.contains("Steve Jobs"));
@@ -306,7 +369,7 @@ Voiceover."#;
         let content = "---\ntemplate: lower-third\nprops:\n  name: \"Jane Doe\"\n  title: \"CEO, Acme Corp\"\n---\nVoiceover.";
         let scene = parse_scene(content, Path::new("test.md")).unwrap();
         let html = registry
-            .render_scene_html(&scene, &test_theme(), 1920, 1080, 30, 150)
+            .render_scene_html(&scene, &test_theme(), 1920, 1080, 30, 150, None)
             .unwrap();
         assert!(html.contains("Jane Doe"));
         assert!(html.contains("CEO, Acme Corp"));
@@ -329,7 +392,7 @@ props:
 Voiceover."#;
         let scene = parse_scene(content, Path::new("test.md")).unwrap();
         let html = registry
-            .render_scene_html(&scene, &test_theme(), 1920, 1080, 100, 150)
+            .render_scene_html(&scene, &test_theme(), 1920, 1080, 100, 150, None)
             .unwrap();
         assert!(html.contains("Get Started Today"));
         assert!(html.contains("Three easy steps"));
@@ -345,7 +408,7 @@ Voiceover."#;
             "---\ntemplate: kinetic-text\n---\nThe quick brown fox jumps over the lazy dog";
         let scene = parse_scene(content, Path::new("test.md")).unwrap();
         let html = registry
-            .render_scene_html(&scene, &test_theme(), 1920, 1080, 75, 150)
+            .render_scene_html(&scene, &test_theme(), 1920, 1080, 75, 150, None)
             .unwrap();
         // Each word should appear as an individual span
         assert!(html.contains(r#"<span class="word"#));
@@ -363,7 +426,7 @@ Voiceover."#;
         let content = "---\ntemplate: kinetic-text\nprops:\n  text: \"Hello beautiful world\"\n---\nVoiceover.";
         let scene = parse_scene(content, Path::new("test.md")).unwrap();
         let html = registry
-            .render_scene_html(&scene, &test_theme(), 1920, 1080, 50, 150)
+            .render_scene_html(&scene, &test_theme(), 1920, 1080, 50, 150, None)
             .unwrap();
         // Should use the `text` prop over the script
         assert!(html.contains(">Hello</span>"));
@@ -387,7 +450,7 @@ props:
 Voiceover."#;
         let scene = parse_scene(content, Path::new("test.md")).unwrap();
         let html = registry
-            .render_scene_html(&scene, &test_theme(), 1920, 1080, 50, 150)
+            .render_scene_html(&scene, &test_theme(), 1920, 1080, 50, 150, None)
             .unwrap();
         assert!(html.contains("Before"));
         assert!(html.contains("The old way of doing things"));
@@ -403,7 +466,7 @@ Voiceover."#;
         let scene = parse_scene(content, Path::new("test.md")).unwrap();
         let theme = test_theme();
         let html = registry
-            .render_scene_html(&scene, &theme, 1920, 1080, 0, 150)
+            .render_scene_html(&scene, &theme, 1920, 1080, 0, 150, None)
             .unwrap();
         // Should use theme background when no scene-level override
         assert!(html.contains("#0F172A"));
@@ -416,7 +479,7 @@ Voiceover."#;
         let scene = parse_scene(content, Path::new("test.md")).unwrap();
         let theme = test_theme();
         let html = registry
-            .render_scene_html(&scene, &theme, 1920, 1080, 0, 150)
+            .render_scene_html(&scene, &theme, 1920, 1080, 0, 150, None)
             .unwrap();
         // Should use the scene-level background override
         assert!(html.contains("#FF0000"));
@@ -445,7 +508,7 @@ Voiceover."#;
             "---\ntemplate: my-custom\nprops:\n  custom_field: \"It works!\"\n---\nScript.";
         let scene = parse_scene(content, Path::new("test.md")).unwrap();
         let html = registry
-            .render_scene_html(&scene, &test_theme(), 1920, 1080, 0, 150)
+            .render_scene_html(&scene, &test_theme(), 1920, 1080, 0, 150, None)
             .unwrap();
         assert!(html.contains("It works!"));
     }
@@ -470,7 +533,7 @@ Voiceover."#;
         let content = "---\ntemplate: title-card\nprops:\n  title: \"Overridden!\"\n---\nScript.";
         let scene = parse_scene(content, Path::new("test.md")).unwrap();
         let html = registry
-            .render_scene_html(&scene, &test_theme(), 1920, 1080, 0, 150)
+            .render_scene_html(&scene, &test_theme(), 1920, 1080, 0, 150, None)
             .unwrap();
         // Should contain the custom override marker, not the built-in title-card content
         assert!(html.contains("custom-override"));
@@ -503,7 +566,7 @@ props:
 Voiceover."#;
         let scene = parse_scene(content, Path::new("test.md")).unwrap();
         let html = registry
-            .render_scene_html(&scene, &test_theme(), 1920, 1080, 0, 150)
+            .render_scene_html(&scene, &test_theme(), 1920, 1080, 0, 150, None)
             .unwrap();
         assert!(html.contains("Slide One"));
         assert!(html.contains("First slide content"));
@@ -526,7 +589,7 @@ props:
 Voiceover."#;
         let scene = parse_scene(content, Path::new("test.md")).unwrap();
         let html = registry
-            .render_scene_html(&scene, &test_theme(), 1920, 1080, 75, 150)
+            .render_scene_html(&scene, &test_theme(), 1920, 1080, 75, 150, None)
             .unwrap();
         assert!(html.contains("Only Slide"));
         assert!(html.contains("Solo content"));
@@ -538,7 +601,7 @@ Voiceover."#;
         let registry = TemplateRegistry::new().unwrap();
         let content = "---\ntemplate: nonexistent\n---\nText.";
         let scene = parse_scene(content, Path::new("test.md")).unwrap();
-        let result = registry.render_scene_html(&scene, &test_theme(), 1920, 1080, 0, 150);
+        let result = registry.render_scene_html(&scene, &test_theme(), 1920, 1080, 0, 150, None);
         assert!(result.is_err());
         if let Err(VidgenError::TemplateNotFound(name)) = result {
             assert_eq!(name, "nonexistent");
@@ -582,7 +645,7 @@ Voiceover."#;
         let content = "---\ntemplate: caption-overlay\nprops:\n  text: \"Hello beautiful world\"\n  style: background-box\n  position: top\n---\nVoiceover.";
         let scene = parse_scene(content, Path::new("test.md")).unwrap();
         let html = registry
-            .render_scene_html(&scene, &test_theme(), 1920, 1080, 50, 150)
+            .render_scene_html(&scene, &test_theme(), 1920, 1080, 50, 150, None)
             .unwrap();
         assert!(html.contains(">Hello</span>"));
         assert!(html.contains(">beautiful</span>"));
@@ -597,7 +660,7 @@ Voiceover."#;
         let content = "---\ntemplate: caption-overlay\n---\nThe quick brown fox";
         let scene = parse_scene(content, Path::new("test.md")).unwrap();
         let html = registry
-            .render_scene_html(&scene, &test_theme(), 1920, 1080, 50, 150)
+            .render_scene_html(&scene, &test_theme(), 1920, 1080, 50, 150, None)
             .unwrap();
         // Falls back to script text
         assert!(html.contains(">The</span>"));
@@ -615,7 +678,7 @@ Voiceover."#;
         let content = "---\ntemplate: kinetic-text\nprops:\n  style: bounce\n---\nWord one two";
         let scene = parse_scene(content, Path::new("test.md")).unwrap();
         let html = registry
-            .render_scene_html(&scene, &test_theme(), 1920, 1080, 50, 150)
+            .render_scene_html(&scene, &test_theme(), 1920, 1080, 50, 150, None)
             .unwrap();
         assert!(html.contains("bounce"));
     }
@@ -626,7 +689,7 @@ Voiceover."#;
         let content = "---\ntemplate: lower-third\nprops:\n  name: \"Jane\"\n  accent_color: \"#FF5500\"\n---\nVoiceover.";
         let scene = parse_scene(content, Path::new("test.md")).unwrap();
         let html = registry
-            .render_scene_html(&scene, &test_theme(), 1920, 1080, 30, 150)
+            .render_scene_html(&scene, &test_theme(), 1920, 1080, 30, 150, None)
             .unwrap();
         assert!(html.contains("#FF5500"));
     }
@@ -639,9 +702,94 @@ Voiceover."#;
         let scene = parse_scene(content, Path::new("test.md")).unwrap();
         let theme = test_theme();
         let html = registry
-            .render_scene_html(&scene, &theme, 1920, 1080, 30, 150)
+            .render_scene_html(&scene, &theme, 1920, 1080, 30, 150, None)
             .unwrap();
         // Should use theme primary as default accent_color
         assert!(html.contains(&theme.primary));
+    }
+
+    #[test]
+    fn test_inject_base_tag() {
+        let html = "<html><head><meta charset=\"utf-8\"></head><body></body></html>";
+        let result = inject_base_tag(html, Path::new("/projects/my-video"));
+        assert!(result.contains("<base href=\"file:///projects/my-video/\">"));
+        assert!(result.contains("<head><base href="));
+    }
+
+    #[test]
+    fn test_resolve_asset_values_in_props() {
+        let mut data = json!({
+            "image": "@assets/images/logo.png",
+            "nested": {
+                "bg": "@assets/images/bg.jpg"
+            },
+            "list": ["@assets/audio/track.mp3", "plain text"],
+            "number": 42
+        });
+        resolve_asset_values(&mut data, Path::new("/project"));
+        assert_eq!(
+            data["image"],
+            json!("file:///project/assets/images/logo.png")
+        );
+        assert_eq!(
+            data["nested"]["bg"],
+            json!("file:///project/assets/images/bg.jpg")
+        );
+        assert_eq!(
+            data["list"][0],
+            json!("file:///project/assets/audio/track.mp3")
+        );
+        assert_eq!(data["list"][1], json!("plain text"));
+        assert_eq!(data["number"], json!(42));
+    }
+
+    #[test]
+    fn test_render_with_project_path_injects_base_tag() {
+        let registry = TemplateRegistry::new().unwrap();
+        let content = "---\ntemplate: title-card\nprops:\n  title: \"Test\"\n---\nScript.";
+        let scene = parse_scene(content, Path::new("test.md")).unwrap();
+        let html = registry
+            .render_scene_html(
+                &scene,
+                &test_theme(),
+                1920,
+                1080,
+                0,
+                150,
+                Some(Path::new("/projects/demo")),
+            )
+            .unwrap();
+        // Should have base tag for asset resolution
+        assert!(html.contains("<base href=\"file:///projects/demo/\">"));
+    }
+
+    #[test]
+    fn test_render_with_project_path_resolves_asset_props() {
+        // Use a custom template that renders the image prop
+        let dir = tempfile::tempdir().unwrap();
+        let components_dir = dir.path().join("templates").join("components");
+        std::fs::create_dir_all(&components_dir).unwrap();
+        let tpl = r#"<!DOCTYPE html><html><head><meta charset="utf-8"><style>body { width: {{width}}px; height: {{height}}px; }</style></head><body><img src="{{image}}"></body></html>"#;
+        std::fs::write(components_dir.join("img-test.html"), tpl).unwrap();
+
+        let mut registry = TemplateRegistry::new().unwrap();
+        registry.register_project_templates(dir.path()).unwrap();
+
+        let content = "---\ntemplate: img-test\nprops:\n  image: \"@assets/images/logo.png\"\n---\nScript.";
+        let scene = parse_scene(content, Path::new("test.md")).unwrap();
+        let html = registry
+            .render_scene_html(
+                &scene,
+                &test_theme(),
+                1920,
+                1080,
+                0,
+                150,
+                Some(dir.path()),
+            )
+            .unwrap();
+        // @assets/ should be resolved to file:// URL
+        let expected = format!("file://{}/assets/images/logo.png", dir.path().display());
+        assert!(html.contains(&expected), "HTML should contain resolved asset path: {expected}");
     }
 }

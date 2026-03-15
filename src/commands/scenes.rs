@@ -541,7 +541,7 @@ pub async fn preview_scene(
 
     let mut registry = TemplateRegistry::new()?;
     registry.register_project_templates(project_path)?;
-    let html = registry.render_scene_html(scene, &cfg.theme, width, height, frame, total_frames)?;
+    let html = registry.render_scene_html(scene, &cfg.theme, width, height, frame, total_frames, Some(project_path))?;
 
     let screenshot = capture_single_frame(&html, width, height, frame, total_frames).await?;
     let png_base64 = base64::engine::general_purpose::STANDARD.encode(&screenshot);

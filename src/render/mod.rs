@@ -428,6 +428,7 @@ pub async fn render_project(
         let scenes_ref = &fmt_scenes;
         let audio_delays_ref = &audio_delays;
         let content_paddings_ref = &content_paddings_after;
+        let project_path_ref = project_path;
 
         // Render scenes concurrently with bounded parallelism
         let scene_results: Vec<_> = stream::iter(0..scenes.len())
@@ -455,6 +456,7 @@ pub async fn render_project(
                     dur,
                     audio_delays_ref[i],
                     content_paddings_ref[i],
+                    Some(project_path_ref),
                 )
                 .await?;
                 Ok::<_, crate::error::VidgenError>((i, path, dur))

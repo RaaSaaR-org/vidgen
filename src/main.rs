@@ -38,6 +38,15 @@ async fn main() {
 async fn run(cli: Cli) -> VidgenResult<()> {
     match cli.command {
         Command::Init { path } => commands::init::run(&path),
+        Command::Asset { action } => {
+            match action {
+                cli::AssetAction::Add {
+                    source,
+                    project,
+                    category,
+                } => commands::asset::add(&source, &project, &category),
+            }
+        }
         Command::Mcp => commands::mcp::run().await,
         Command::Render {
             path,

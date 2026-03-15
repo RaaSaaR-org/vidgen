@@ -85,6 +85,7 @@ pub async fn launch_browser(
         .arg("--disable-gpu")
         .arg("--no-sandbox")
         .arg("--disable-dev-shm-usage")
+        .arg("--allow-file-access-from-files")
         .build()
         .map_err(|e| VidgenError::Browser(format!("Failed to configure browser: {e}")))?;
 
@@ -123,6 +124,7 @@ pub async fn capture_scene_frames(
     effective_duration: f64,
     audio_delay_secs: f64,
     content_padding_after: f64,
+    project_path: Option<&Path>,
 ) -> VidgenResult<std::path::PathBuf> {
     let total_frames = Scene::total_frames_for_duration(effective_duration, fps);
     debug!(
@@ -147,7 +149,7 @@ pub async fn capture_scene_frames(
     .map_err(|e| VidgenError::Browser(format!("Failed to set viewport: {e}")))?;
 
     // Render frame 0 to check if the scene is static
-    let html_frame0 = registry.render_scene_html(scene, theme, width, height, 0, total_frames)?;
+    let html_frame0 = registry.render_scene_html(scene, theme, width, height, 0, total_frames, project_path)?;
     let is_static = frame_cache::is_static_scene(&html_frame0);
 
     if is_static {

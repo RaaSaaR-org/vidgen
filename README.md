@@ -8,10 +8,19 @@ vidgen enables AI agents (and humans) to create complete videos for YouTube, Ins
 
 1. **Parses** markdown scene files with YAML frontmatter (visual config) and body text (voiceover script)
 2. **Renders** HTML/CSS scene templates in headless Chromium via CSS custom properties (`--frame`, `--progress`) and `Page.captureScreenshot` polling
-3. **Synthesizes** voiceover with offline TTS (native/edge) or cloud TTS (ElevenLabs)
+3. **Synthesizes** voiceover with offline TTS (native/edge/piper) or cloud TTS (ElevenLabs)
 4. **Encodes** final output via FFmpeg with platform-specific presets
 
 AI agents interact via MCP tool calls — a complete 5-scene video can be created and rendered in 2 tool calls (~600 tokens).
+
+### Debugging
+
+Set the `RUST_LOG` environment variable to enable structured tracing output (written to stderr):
+
+```bash
+RUST_LOG=debug vidgen render ./my-project/
+RUST_LOG=vidgen=trace vidgen render ./my-project/
+```
 
 ## Installation
 
@@ -53,7 +62,7 @@ my-video/
 ├── styles/                   # CSS: variables, typography, animations
 ├── assets/                   # Images, audio, fonts
 ├── output/                   # Rendered videos (gitignored)
-└── .vidforge/                # Cache (gitignored)
+└── .vidgen/                  # Cache (gitignored)
 ```
 
 ## Scene file format
@@ -115,6 +124,7 @@ vidgen exposes an MCP server (stdio transport) with 10 tools for AI agent integr
 |--------|------|-------|
 | Native | Offline | Default. Uses macOS `say` / Linux `espeak-ng` |
 | Edge | Offline | Microsoft Edge TTS via `edge-tts` CLI. High-quality neural voices |
+| Piper | Offline | Fast local neural TTS via ONNX models. See [piper](https://github.com/rhasspy/piper) |
 | ElevenLabs | Cloud | API key required (`ELEVEN_API_KEY`). Voice cloning support |
 
 ## Output formats
@@ -143,7 +153,7 @@ The `examples/` directory contains three projects:
 |---------|-------------|
 | [`examples/minimal/`](examples/minimal/) | Bare-minimum 2-scene project — the simplest thing that works |
 | [`examples/intro/`](examples/intro/) | 7-scene intro video with multi-format output (landscape, portrait, square) |
-| [`examples/showcase/`](examples/showcase/) | 11 scenes demonstrating every template and feature (subtitles, format overrides, parallel rendering) |
+| [`examples/showcase/`](examples/showcase/) | 14 scenes demonstrating every built-in template, custom components, and features (subtitles, format overrides, parallel rendering) |
 
 ```bash
 # Render the minimal example

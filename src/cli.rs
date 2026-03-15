@@ -1,5 +1,29 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
+
+#[derive(Subcommand, Debug)]
+pub enum AssetAction {
+    /// Add an asset to the project (download URL or copy local file)
+    Add {
+        /// URL or local file path to add
+        source: String,
+
+        /// Project directory (default: current directory)
+        #[arg(long, short = 'p', default_value = ".")]
+        project: PathBuf,
+
+        /// Asset category (determines subdirectory)
+        #[arg(long, short = 'c', value_enum, default_value = "images")]
+        category: AssetCategory,
+    },
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum AssetCategory {
+    Images,
+    Audio,
+    Fonts,
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -92,6 +116,11 @@ pub enum Command {
         /// Pin to a specific scene index for preview (default: detect changed scene)
         #[arg(long, short = 's')]
         scene: Option<usize>,
+    },
+    /// Manage project assets (images, audio, fonts)
+    Asset {
+        #[command(subcommand)]
+        action: AssetAction,
     },
     /// Quick render: pipe text in, get an MP4 out (single auto-duration scene)
     #[command(alias = "qr")]

@@ -1,0 +1,33 @@
+[project]
+name = "Features Test"
+version = "1.0.0"
+
+[video]
+fps = 30
+width = 1920
+height = 1080
+
+[voice]
+engine = "native"
+padding_before = 0.5
+padding_after = 0.5
+auto_fallback_duration = 3.0
+
+[theme]
+primary = "#10B981"
+secondary = "#6366F1"
+background = "#0F172A"
+text = "#F1F5F9"
+font_heading = "Inter"
+font_body = "Inter"
+
+[output]
+directory = "./output"
+quality = "draft"
+
+# Issue #8: Project-wide background music with fade
+#[audio.background]
+#file = "@assets/audio/bg-music.mp3"
+#volume = -12
+#fade_in = 1.0
+#fade_out = 2.0

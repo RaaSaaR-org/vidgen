@@ -8,17 +8,6 @@ use std::path::Path;
 /// Cache key is SHA-256 of `"{engine}\0{voice}\0{speed}\0{text}"`.
 /// Cached audio is stored in `<project>/assets/voiceover/<hash>.wav`
 /// with a `<hash>.json` sidecar containing duration metadata.
-pub fn synthesize_cached(
-    engine: &dyn TtsEngine,
-    text: &str,
-    voice: Option<&str>,
-    speed: f32,
-    output_path: &Path,
-    project_path: &Path,
-) -> VidgenResult<SynthesisResult> {
-    synthesize_cached_with_options(engine, text, voice, speed, output_path, project_path, false)
-}
-
 /// Synthesize TTS with caching support and optional force flag.
 pub fn synthesize_cached_with_options(
     engine: &dyn TtsEngine,

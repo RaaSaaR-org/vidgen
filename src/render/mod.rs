@@ -250,25 +250,22 @@ pub async fn render_project(
             .unwrap_or(config.voice.speed);
 
         // Use a per-scene engine if the scene overrides the engine, otherwise use the project engine
-        let scene_engine: Option<Box<dyn tts::TtsEngine>>;
-        let effective_engine: &dyn tts::TtsEngine = if let Some(engine_name) = scene_engine_override {
+        let scene_engine: Option<Box<dyn tts::TtsEngine>> = if let Some(engine_name) = scene_engine_override {
             let mut voice_cfg = config.voice.clone();
             voice_cfg.engine = engine_name.to_string();
             match tts::create_engine(&voice_cfg) {
-                Ok(eng) => {
-                    scene_engine = Some(eng);
-                    scene_engine.as_ref().unwrap().as_ref()
-                }
+                Ok(eng) => Some(eng),
                 Err(e) => {
                     eprintln!("  TTS scene {}: engine '{}' failed ({}), using default", i + 1, engine_name, e);
-                    scene_engine = None;
-                    tts_engine.as_ref().unwrap().as_ref()
+                    None
                 }
             }
         } else {
-            scene_engine = None;
-            tts_engine.as_ref().unwrap().as_ref()
+            None
         };
+        let effective_engine: &dyn tts::TtsEngine = scene_engine
+            .as_deref()
+            .unwrap_or_else(|| tts_engine.as_ref().unwrap().as_ref());
 
         match tts::cache::synthesize_cached_with_options(
             effective_engine,

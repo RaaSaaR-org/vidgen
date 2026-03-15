@@ -4,7 +4,58 @@ use crate::scene::Scene;
 use handlebars::Handlebars;
 use serde_json::json;
 use std::path::Path;
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
+
+/// Check if a string contains emoji characters (Unicode ranges for common emoji).
+pub fn contains_emoji(text: &str) -> bool {
+    text.chars().any(|c| {
+        matches!(c,
+            '\u{1F600}'..='\u{1F64F}' | // Emoticons
+            '\u{1F300}'..='\u{1F5FF}' | // Misc Symbols and Pictographs
+            '\u{1F680}'..='\u{1F6FF}' | // Transport and Map
+            '\u{1F1E0}'..='\u{1F1FF}' | // Flags
+            '\u{2600}'..='\u{26FF}'   | // Misc symbols
+            '\u{2700}'..='\u{27BF}'   | // Dingbats
+            '\u{FE00}'..='\u{FE0F}'   | // Variation Selectors
+            '\u{1F900}'..='\u{1F9FF}' | // Supplemental Symbols
+            '\u{1FA00}'..='\u{1FA6F}' | // Chess Symbols
+            '\u{1FA70}'..='\u{1FAFF}' | // Symbols Extended-A
+            '\u{200D}'                | // ZWJ
+            '\u{231A}'..='\u{231B}'   | // Watch, Hourglass
+            '\u{23E9}'..='\u{23F3}'   | // Various
+            '\u{23F8}'..='\u{23FA}'   | // Various
+            '\u{25AA}'..='\u{25AB}'   | // Squares
+            '\u{25B6}' | '\u{25C0}'   | // Play buttons
+            '\u{25FB}'..='\u{25FE}'   | // Squares
+            '\u{2934}'..='\u{2935}'   | // Arrows
+            '\u{2B05}'..='\u{2B07}'   | // Arrows
+            '\u{2B1B}'..='\u{2B1C}'   | // Squares
+            '\u{2B50}' | '\u{2B55}'   | // Star, Circle
+            '\u{3030}' | '\u{303D}'   | // Wavy dash, part alternation
+            '\u{3297}' | '\u{3299}'     // Circled ideographs
+        )
+    })
+}
+
+/// Twemoji CDN script tag for cross-platform emoji rendering.
+/// Uses jsDelivr CDN with Twemoji v14.0.2 (latest stable).
+const TWEMOJI_SCRIPT: &str = r#"<script src="https://cdn.jsdelivr.net/npm/@twemoji/api@latest/dist/twemoji.min.js" crossorigin="anonymous"></script>
+<script>document.addEventListener('DOMContentLoaded', function() { twemoji.parse(document.body, { folder: 'svg', ext: '.svg' }); });</script>
+<style>img.emoji { height: 1em; width: 1em; margin: 0 .05em 0 .1em; vertical-align: -0.1em; }</style>"#;
+
+/// Inject Twemoji script into HTML if emoji are detected.
+fn inject_emoji_support(html: &str) -> String {
+    if !contains_emoji(html) {
+        return html.to_string();
+    }
+    warn!("Emoji detected in template — injecting Twemoji for cross-platform rendering");
+    // Insert before </head>
+    if let Some(pos) = html.find("</head>") {
+        format!("{}\n{}\n{}", &html[..pos], TWEMOJI_SCRIPT, &html[pos..])
+    } else {
+        html.to_string()
+    }
+}
 
 /// Resolve `@assets/...` prefixes in a JSON value to absolute `file://` URLs.
 /// Only transforms string values; recurses into arrays and objects.
@@ -288,6 +339,9 @@ impl<'a> TemplateRegistry<'a> {
         let html = self.hbs
             .render(template_name, &data)
             .map_err(|e| VidgenError::TemplateRender(e.to_string()))?;
+
+        // Inject Twemoji CDN script if emoji characters are detected
+        let html = inject_emoji_support(&html);
 
         // Inject <base> tag for file:// asset resolution in headless Chromium
         if let Some(pp) = project_path {
@@ -791,5 +845,43 @@ Voiceover."#;
         // @assets/ should be resolved to file:// URL
         let expected = format!("file://{}/assets/images/logo.png", dir.path().display());
         assert!(html.contains(&expected), "HTML should contain resolved asset path: {expected}");
+    }
+
+    #[test]
+    fn test_contains_emoji() {
+        assert!(contains_emoji("Hello 🤖"));
+        assert!(contains_emoji("🧠 Brain"));
+        assert!(contains_emoji("🚀🔥💬"));
+        assert!(!contains_emoji("Hello World"));
+        assert!(!contains_emoji("No emoji here!"));
+        assert!(!contains_emoji("Just plain text with numbers 123"));
+    }
+
+    #[test]
+    fn test_inject_emoji_support_with_emoji() {
+        let html = "<html><head><style></style></head><body>Hello 🤖</body></html>";
+        let result = inject_emoji_support(html);
+        assert!(result.contains("twemoji"));
+        assert!(result.contains("img.emoji"));
+    }
+
+    #[test]
+    fn test_inject_emoji_support_without_emoji() {
+        let html = "<html><head></head><body>Hello World</body></html>";
+        let result = inject_emoji_support(html);
+        assert!(!result.contains("twemoji"));
+        assert_eq!(result, html);
+    }
+
+    #[test]
+    fn test_render_scene_with_emoji_in_props() {
+        let registry = TemplateRegistry::new().unwrap();
+        let content = "---\ntemplate: title-card\nprops:\n  title: \"Hello 🤖 World\"\n  subtitle: \"Testing emoji\"\n---\nScript.";
+        let scene = parse_scene(content, Path::new("test.md")).unwrap();
+        let html = registry
+            .render_scene_html(&scene, &test_theme(), 1920, 1080, 0, 150, None)
+            .unwrap();
+        assert!(html.contains("twemoji"), "Twemoji should be injected when emoji are in props");
+        assert!(html.contains("Hello 🤖 World"));
     }
 }

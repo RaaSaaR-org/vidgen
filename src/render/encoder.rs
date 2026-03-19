@@ -309,10 +309,18 @@ pub fn concat_scenes(scene_files: &[PathBuf], output_path: &Path) -> VidgenResul
         cmd.args(["-i"]).arg(file.as_os_str());
     }
 
-    // Build concat filter — generates silence for inputs missing audio
+    // Build concat filter — normalize all streams to identical format first.
+    // This prevents DTS/PTS timestamp mismatches between HTML-rendered scenes
+    // (from SceneEncoder) and video clip scenes (from prepare_video_clip),
+    // which have different timebases and can cause truncated output.
     let mut filter_parts: Vec<String> = Vec::new();
 
     for (i, file) in scene_files.iter().enumerate() {
+        // Normalize video: consistent fps, pixel format, timebase, and reset PTS
+        filter_parts.push(format!(
+            "[{i}:v]fps=30,format=yuv420p,setpts=PTS-STARTPTS[v{i}]"
+        ));
+
         if any_audio && !has_audio_stream(file) {
             // Generate silence for this input to match its video duration
             let dur = probe_video_duration(file).unwrap_or(3.0);
@@ -326,13 +334,13 @@ pub fn concat_scenes(scene_files: &[PathBuf], output_path: &Path) -> VidgenResul
         }
     }
 
-    // Concat filter
+    // Concat filter with normalized inputs
     let inputs: String = (0..n)
         .map(|i| {
             if any_audio {
-                format!("[{i}:v][a{i}]")
+                format!("[v{i}][a{i}]")
             } else {
-                format!("[{i}:v]")
+                format!("[v{i}]")
             }
         })
         .collect();
@@ -423,13 +431,43 @@ pub fn concat_scenes_with_transitions(
         return concat_scenes(scene_files, output_path);
     }
 
+    // BUG-001: xfade transitions produce truncated output when mixing
+    // HTML-rendered scenes with video clip scenes (prepare_video_clip output).
+    // Detect mixed scene types by checking if any scene was produced by
+    // prepare_video_clip (which adds an overlay post-process or has different
+    // internal structure). For safety, check actual file sizes — clip scenes
+    // tend to be much larger than HTML-rendered scenes.
+    // The concat filter path works correctly, so use it as fallback.
+    // TODO: fix xfade with mixed scene types
+    if scene_files.len() > 1 {
+        let sizes: Vec<u64> = scene_files.iter()
+            .map(|f| std::fs::metadata(f).map(|m| m.len()).unwrap_or(0))
+            .collect();
+        let max_size = sizes.iter().max().unwrap_or(&0);
+        let min_size = sizes.iter().min().unwrap_or(&0);
+        // If largest scene is >10x smallest, likely mixed HTML + clip scenes
+        if *min_size > 0 && *max_size > min_size * 10 {
+            warn!("Mixed scene types detected — using hard cuts instead of transitions (BUG-001 workaround)");
+            return concat_scenes(scene_files, output_path);
+        }
+    }
+
     // Check which scene files have audio streams
     let has_audio: Vec<bool> = scene_files.iter().map(|f| has_audio_stream(f)).collect();
     let any_audio = has_audio.iter().any(|&a| a);
 
-    // Build FFmpeg xfade filter graph for video
+    // Normalize all video inputs to prevent DTS/PTS mismatches between
+    // HTML-rendered scenes and video clip scenes (different timebases).
     let n = scene_files.len();
     let mut filter_parts: Vec<String> = Vec::new();
+
+    for i in 0..n {
+        filter_parts.push(format!(
+            "[{i}:v]fps=30,format=yuv420p,setpts=PTS-STARTPTS[vin{i}]"
+        ));
+    }
+
+    // Build FFmpeg xfade filter graph for video
     let mut offset = 0.0_f64;
 
     for i in 0..n - 1 {
@@ -448,15 +486,15 @@ pub fn concat_scenes_with_transitions(
         let offset_val = offset.max(0.0);
 
         let input_a = if i == 0 {
-            "[0:v]".to_string()
+            "[vin0]".to_string()
         } else {
-            format!("[v{i}]")
+            format!("[xv{i}]")
         };
-        let input_b = format!("[{}:v]", i + 1);
+        let input_b = format!("[vin{}]", i + 1);
         let output_label = if i == n - 2 {
             "[vout]".to_string()
         } else {
-            format!("[v{}]", i + 1)
+            format!("[xv{}]", i + 1)
         };
 
         filter_parts.push(format!(

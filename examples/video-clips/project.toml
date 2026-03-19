@@ -6,3 +6,5 @@ engine = "native"
 
 [video]
 fps = 30
+default_transition = "fade"
+default_transition_duration = 0.5

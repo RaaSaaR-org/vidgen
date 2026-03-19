@@ -2,9 +2,10 @@
 
 ## BUG-001: Video truncated when concatenating HTML-rendered scenes with video clip scenes
 
-**Status:** Mitigated (auto-detected, falls back to hard cuts)
-**Severity:** Low — transitions silently downgraded to hard cuts for mixed projects
+**Status:** Fixed (concat demuxer + re-encode)
+**Severity:** Resolved — mixed projects render correctly, transitions downgraded to hard cuts
 **Discovered:** 2026-03-19
+**Last tested:** 2026-03-19 (vidgen v0.1.4, commit after BUG-001 detection was added)
 
 ### Problem
 
@@ -68,6 +69,51 @@ ffmpeg -y -f concat -safe 0 -i /tmp/scenes.txt \
 ```
 
 Also: do NOT use `transition_in`/`transition_out` on `video_source` scenes.
+
+### Current State of the Fix Attempt (2026-03-19)
+
+The latest build added detection of mixed scene types. The render log shows:
+
+```
+WARN vidgen::render::encoder: Mixed scene types detected — using hard cuts instead of transitions (BUG-001 workaround)
+error: FFmpeg error: FFmpeg concat failed: Conversion failed!
+```
+
+**What the current code does:** Detects mixed sources and disables xfade transitions (falls back to hard cuts). This is correct behavior.
+
+**What still fails:** The concat itself still fails with `Conversion failed!`. The detection was the right first step, but the underlying concat command still has the incompatibility.
+
+**What needs to happen next:**
+
+The hard-cuts concat path must re-encode instead of stream-copy. Specifically, when mixed scene types are detected, the concat command should use:
+
+```bash
+ffmpeg -y -f concat -safe 0 -i scenes.txt \
+  -c:v libx264 -crf 23 -preset medium -pix_fmt yuv420p \
+  -c:a aac -ar 44100 -ac 2 \
+  output.mp4
+```
+
+instead of:
+
+```bash
+ffmpeg -y -f concat -safe 0 -i scenes.txt -c copy output.mp4
+```
+
+The re-encode approach is ~2-3x slower but produces correct output every time. It has been tested manually on an 11-scene project (75s, mix of HTML templates + 2 YouTube clips) and works perfectly.
+
+**Implementation suggestion:** In the concat function (likely in `render/encoder.rs`), when the mixed-scene-type flag is set:
+1. Replace `-c copy` with `-c:v libx264 -crf {crf} -preset medium -pix_fmt yuv420p -c:a aac -ar 44100 -ac 2`
+2. Use the project's configured CRF value (from quality setting)
+3. Log a note that re-encoding is being used due to mixed sources
+
+**Alternative (better long-term fix):** Make `prepare_video_clip()` produce output that is bit-exact compatible with the Chromium-rendered scenes. This likely means matching:
+- Timebase: `1/15360` (what Chromium scenes use)
+- GOP structure / keyframe interval
+- Exact same x264 encoding parameters
+- DTS/PTS starting from 0 with no gaps
+
+This would allow `-c copy` concat to work and be much faster, but is harder to implement correctly.
 
 ### Test Case
 

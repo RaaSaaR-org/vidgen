@@ -289,82 +289,41 @@ impl SceneEncoder {
     }
 }
 
-/// Concatenate multiple MP4 files using FFmpeg's concat filter.
-/// Uses the filter (not demuxer) to properly handle audio timestamp continuity
-/// across scene boundaries. Re-encodes both video and audio for seamless output.
+/// Concatenate multiple MP4 files using FFmpeg's concat demuxer with re-encoding.
+///
+/// Re-encodes video and audio to handle format differences between HTML-rendered
+/// scenes (from SceneEncoder) and video clip scenes (from prepare_video_clip).
+/// This is slower than stream copy but produces correct output every time,
+/// even with mixed scene types (BUG-001).
 pub fn concat_scenes(scene_files: &[PathBuf], output_path: &Path) -> VidgenResult<()> {
     if scene_files.len() == 1 {
         std::fs::copy(&scene_files[0], output_path)?;
         return Ok(());
     }
 
-    let n = scene_files.len();
-    let any_audio = scene_files.iter().any(|f| has_audio_stream(f));
+    // Write concat list file for the demuxer
+    let concat_dir = output_path.parent().unwrap_or(Path::new("."));
+    let concat_list_path = concat_dir.join(".vidgen-concat-list.txt");
+    let mut concat_content = String::new();
+    for path in scene_files {
+        concat_content.push_str(&format!("file '{}'\n", path.display()));
+    }
+    std::fs::write(&concat_list_path, &concat_content)?;
 
     let mut cmd = Command::new("ffmpeg");
-    cmd.arg("-y");
+    cmd.args(["-y", "-f", "concat", "-safe", "0", "-i"])
+        .arg(&concat_list_path);
 
-    // Add all input files
-    for file in scene_files {
-        cmd.args(["-i"]).arg(file.as_os_str());
-    }
-
-    // Build concat filter — normalize all streams to identical format first.
-    // This prevents DTS/PTS timestamp mismatches between HTML-rendered scenes
-    // (from SceneEncoder) and video clip scenes (from prepare_video_clip),
-    // which have different timebases and can cause truncated output.
-    let mut filter_parts: Vec<String> = Vec::new();
-
-    for (i, file) in scene_files.iter().enumerate() {
-        // Normalize video: consistent fps, pixel format, timebase, and reset PTS
-        filter_parts.push(format!(
-            "[{i}:v]fps=30,format=yuv420p,setpts=PTS-STARTPTS[v{i}]"
-        ));
-
-        if any_audio && !has_audio_stream(file) {
-            // Generate silence for this input to match its video duration
-            let dur = probe_video_duration(file).unwrap_or(3.0);
-            filter_parts.push(format!(
-                "anullsrc=cl=stereo:r=44100[silence{i}];[silence{i}]atrim=0:{dur:.3},asetpts=PTS-STARTPTS[a{i}]"
-            ));
-        } else if any_audio {
-            filter_parts.push(format!(
-                "[{i}:a]aformat=sample_rates=44100:channel_layouts=stereo,asetpts=PTS-STARTPTS[a{i}]"
-            ));
-        }
-    }
-
-    // Concat filter with normalized inputs
-    let inputs: String = (0..n)
-        .map(|i| {
-            if any_audio {
-                format!("[v{i}][a{i}]")
-            } else {
-                format!("[v{i}]")
-            }
-        })
-        .collect();
-
-    let a_flag = if any_audio { 1 } else { 0 };
-    filter_parts.push(format!(
-        "{inputs}concat=n={n}:v=1:a={a_flag}[vout]{}",
-        if any_audio { "[aout]" } else { "" }
-    ));
-
-    let filter = filter_parts.join(";");
-    cmd.args(["-filter_complex", &filter, "-map", "[vout]"]);
-
-    if any_audio {
-        cmd.args([
-            "-map", "[aout]",
-            "-c:a", "aac", "-ac", "2", "-ar", "44100", "-b:a", "192k",
-        ]);
-    }
-
+    // Always re-encode to normalize any format differences between scene types.
+    // This prevents DTS/PTS mismatches, timebase incompatibilities, and
+    // truncated output when mixing HTML-rendered + video clip scenes.
     cmd.args([
-        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "23", "-preset", "fast",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-crf", "23", "-preset", "fast",
+        "-c:a", "aac", "-ac", "2", "-ar", "44100", "-b:a", "192k",
         "-movflags", "+faststart",
     ]);
+
     cmd.arg(output_path.as_os_str());
     cmd.stdout(Stdio::null());
     cmd.stderr(Stdio::piped());
@@ -372,6 +331,9 @@ pub fn concat_scenes(scene_files: &[PathBuf], output_path: &Path) -> VidgenResul
     let output = cmd
         .output()
         .map_err(|e| VidgenError::Ffmpeg(format!("Failed to spawn ffmpeg concat: {e}")))?;
+
+    // Clean up concat list
+    let _ = std::fs::remove_file(&concat_list_path);
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

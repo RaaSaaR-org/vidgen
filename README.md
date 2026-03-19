@@ -13,22 +13,23 @@ vidgen enables AI agents (and humans) to create complete videos for YouTube, Ins
 
 AI agents interact via MCP tool calls — a complete 5-scene video can be created and rendered in 2 tool calls (~600 tokens).
 
-### Debugging
-
-Set the `RUST_LOG` environment variable to enable structured tracing output (written to stderr):
-
-```bash
-RUST_LOG=debug vidgen render ./my-project/
-RUST_LOG=vidgen=trace vidgen render ./my-project/
-```
-
 ## Installation
 
 ```bash
+# Core (HTML scenes + video clips)
 cargo install vidgen
+
+# With website scroll capture
+cargo install vidgen --features clipper
+
+# With YouTube clip support
+cargo install vidgen --features youtube
+
+# Everything
+cargo install vidgen --features clipper,youtube
 ```
 
-Chromium and FFmpeg are auto-downloaded on first run.
+Chromium and FFmpeg are auto-downloaded on first run. The YouTube feature auto-downloads the yt-dlp binary to `~/.vidgen/libs/`.
 
 ## Quick start
 
@@ -37,22 +38,20 @@ Chromium and FFmpeg are auto-downloaded on first run.
 vidgen init ./my-video --preset short
 
 # Render a project
-vidgen render ./my-project/
+vidgen render ./my-video
+
+# Quick render from text (alias: qr)
+echo "Hello world" | vidgen qr -o hello.mp4
+vidgen qr --text "Breaking news" -t lower-third -o news.mp4
 
 # Preview all scenes as thumbnails
-vidgen preview ./my-project/ --all
-
-# Preview a single scene as animated GIF
-vidgen preview ./my-project/ --scene 2 --gif
+vidgen preview ./my-video --all
 
 # Watch mode for live iteration
-vidgen watch ./my-project/
+vidgen watch ./my-video
 
-# Quick render from stdin
-echo "Hello world" | vidgen quickrender --voice en_US-amy-medium -o hello.mp4
-
-# Add assets to a project
-vidgen asset add ./photo.jpg -p ./my-project/ -c images
+# Add assets
+vidgen asset add ./photo.jpg -p ./my-video -c images
 ```
 
 ## Project structure
@@ -67,40 +66,103 @@ my-video/
 │   ├── 02-content.md
 │   └── 03-outro.md
 ├── templates/
-│   └── components/           # HTML/CSS visual components
+│   └── components/           # Custom HTML/CSS components (override built-ins)
 ├── styles/                   # CSS: variables, typography, animations
-├── assets/                   # Images, audio, fonts
+├── assets/
+│   ├── clips/                # Video clips (from clip commands or manual)
+│   ├── images/
+│   ├── audio/
+│   └── fonts/
 ├── output/                   # Rendered videos (gitignored)
 └── .vidgen/                  # Cache (gitignored)
 ```
 
-## Scene file format
+## Scene types
 
-Each scene is a markdown file. The YAML frontmatter defines visuals and timing; the body text becomes the voiceover:
+vidgen supports three scene types, all defined as `.md` files:
 
-```markdown
+### HTML template scenes
+
+Standard scenes rendered via Chromium. The template defines the visual, the body text becomes voiceover:
+
+```yaml
 ---
 template: title-card
 duration: auto
-transition_in: fade
 props:
-  title: "My Video Title 🚀"
+  title: "My Video Title"
   subtitle: "A subtitle"
-  title_animation: fade-up
 voice:
   engine: edge
   voice: "de-DE-ConradNeural"
   speed: 1.1
-audio:
-  music: "@assets/audio/ambient.mp3"
-  music_volume: 0.15
 ---
-
-This is the voiceover script. When duration is set to "auto",
+This is the voiceover script. When duration is "auto",
 the scene length is derived from the TTS audio length.
 ```
 
-Per-scene voice config supports both simple (`voice: "en-US-JennyNeural"`) and structured form with engine/speed overrides. Emoji characters are automatically rendered via Twemoji CDN.
+### Video clip scenes
+
+External MP4 files (website captures, YouTube clips, screen recordings) used as scene visuals. Supports voiceover narration and source audio ducking:
+
+```yaml
+---
+video_source: "@assets/clips/demo-website.mp4"
+duration: auto
+source_volume: 0.2
+---
+Here's what you see on screen. The original clip audio
+plays at 20% while this voiceover narrates over it.
+```
+
+- `video_source` — path to MP4 file (`@assets/` prefix, relative path, or URL)
+- `source_volume` — volume of clip's original audio (0.0 = mute, 1.0 = full, default: muted)
+- `duration: auto` — uses the clip's actual length; fixed values trim the clip
+
+### Sequence scenes
+
+Multiple visuals with a single continuous voiceover. The narration spans all sub-scenes:
+
+```yaml
+---
+template: sequence
+duration: auto
+sub_scenes:
+  - template: title-card
+    duration: 3
+    props:
+      title: "Welcome"
+  - video_source: "@assets/clips/product-demo.mp4"
+    duration: 4
+    source_volume: 0.2
+  - template: content-text
+    duration: auto
+    props:
+      heading: "Key Features"
+---
+Welcome to our product. Here's a quick demo of what it can do.
+And these are the key features we'll cover today.
+```
+
+- Sub-scenes can be HTML templates or video clips
+- One sub-scene can have `duration: auto` to fill remaining voiceover time
+- Source audio from video clips is ducked while voiceover plays
+- The sequence outputs a single MP4 that participates in normal transitions
+
+## Video clip capture
+
+Capture clips directly from websites or YouTube for use in scenes:
+
+```bash
+# Capture a scrolling website (requires --features clipper)
+vidgen clip web https://example.com -p ./my-video -d 5 --scroll-speed 150
+
+# Download + trim a YouTube clip (requires --features youtube)
+vidgen clip youtube "https://youtu.be/..." -p ./my-video --from 10 --to 20
+
+# Use the captured clip in a scene
+# video_source: "@assets/clips/web-example-com.mp4"
+```
 
 ## Built-in templates
 
@@ -113,12 +175,18 @@ Per-scene voice config supports both simple (`voice: "en-US-JennyNeural"`) and s
 | `quote-card` | Styled quote with attribution |
 | `split-screen` | 2-4 panel comparison layout |
 | `lower-third` | Name/title overlay |
-| `caption-overlay` | Word-by-word caption overlay synced to audio (outline/background-box/drop-shadow styles) |
+| `caption-overlay` | Word-by-word caption overlay synced to audio |
 | `cta-card` | End-screen call-to-action |
+
+Custom templates go in `templates/components/` — the file stem becomes the template name and overrides built-ins.
 
 ## MCP server
 
 vidgen exposes an MCP server (stdio transport) with 10 tools for AI agent integration:
+
+```bash
+vidgen mcp
+```
 
 | Tool | Purpose |
 |------|---------|
@@ -152,39 +220,24 @@ Supports multi-format rendering from a single project via CSS container queries:
 
 Platform-specific encoding presets handle codec, bitrate, and file size constraints automatically.
 
-## Design principles
-
-- **Token efficiency first** — Batch MCP operations minimize AI agent token usage
-- **Files as source of truth** — All state is human-readable (markdown, YAML, TOML, HTML, CSS)
-- **Single binary** — `cargo install` gives you everything; external deps auto-download
-- **Offline by default** — Ships with native/edge TTS; cloud TTS is opt-in
-- **Web-native rendering** — Scenes are HTML/CSS with full CSS animations, SVG, Canvas support
-
-## Examples
-
-The `examples/` directory contains four projects:
-
-| Example | Description |
-|---------|-------------|
-| [`examples/minimal/`](examples/minimal/) | Bare-minimum 2-scene project — the simplest thing that works |
-| [`examples/intro/`](examples/intro/) | 7-scene intro video with multi-format output (landscape, portrait, square) |
-| [`examples/showcase/`](examples/showcase/) | 14 scenes demonstrating every built-in template, custom components, and features (subtitles, format overrides, parallel rendering) |
-| [`examples/features-test/`](examples/features-test/) | 6 scenes testing emoji rendering, per-scene voice config, custom components, and asset management |
+## Debugging
 
 ```bash
-# Render the minimal example
-vidgen render examples/minimal/
+# Verbose output (TTS details, encoding info)
+vidgen render ./my-video -v
 
-# Render the showcase in all three formats
-vidgen render examples/showcase/
+# Full debug (implies verbose + saves intermediate scene files)
+vidgen render ./my-video --debug
 
-# Preview all scenes of the features test
-vidgen preview examples/features-test/ --all
+# Custom debug output directory
+vidgen render ./my-video --debug --debug-dir /tmp/vidgen-debug
 ```
+
+Debug mode saves each per-scene MP4 to `output/debug/` (named by scene filename), making it easy to identify which scene has issues.
 
 ## Background music
 
-Project-wide background music can be configured in `project.toml`:
+Project-wide background music in `project.toml`:
 
 ```toml
 [audio.background]
@@ -202,7 +255,39 @@ Per-scene music overrides the project default via `audio.music` in scene frontma
 - `./filename` — relative to scene file (for co-located assets)
 - `{{theme.primary}}` — resolves to `project.toml` `[theme]` values
 - `{{props.title}}` — resolves to scene frontmatter props
+- HTTP/HTTPS URLs — auto-downloaded and cached in `assets/downloads/`
+
+## Feature flags
+
+| Feature | What it adds | Extra dependencies |
+|---------|-------------|-------------------|
+| `clipper` | `vidgen clip web` (website scroll capture) | None (uses existing Chromium) |
+| `youtube` | `vidgen clip youtube` (YouTube download + trim) | `yt-dlp` crate (auto-downloads yt-dlp binary) |
+
+## Examples
+
+| Example | Description |
+|---------|-------------|
+| [`examples/minimal/`](examples/minimal/) | Bare-minimum 2-scene project |
+| [`examples/intro/`](examples/intro/) | 7-scene intro video with multi-format output |
+| [`examples/showcase/`](examples/showcase/) | 14 scenes demonstrating every template and feature |
+| [`examples/features-test/`](examples/features-test/) | Tests emoji, per-scene voice, custom components |
+| [`examples/video-clips/`](examples/video-clips/) | Video clips, sequences, website capture, YouTube integration |
+
+```bash
+vidgen render examples/minimal/
+vidgen render examples/video-clips/
+vidgen preview examples/showcase/ --all
+```
+
+## Design principles
+
+- **Token efficiency first** — Batch MCP operations minimize AI agent token usage
+- **Files as source of truth** — All state is human-readable (markdown, YAML, TOML, HTML, CSS)
+- **Single binary** — `cargo install` gives you everything; external deps auto-download
+- **Offline by default** — Ships with native/edge TTS; cloud TTS is opt-in
+- **Web-native rendering** — Scenes are HTML/CSS with full CSS animations, SVG, Canvas support
 
 ## License
 
-TBD
+MIT

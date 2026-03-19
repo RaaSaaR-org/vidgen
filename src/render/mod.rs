@@ -1,6 +1,7 @@
 pub mod browser;
 pub mod encoder;
 pub mod frame_cache;
+pub mod sequence;
 
 use crate::config::{resolve_encoding, ProjectConfig, QualityPreset};
 use crate::error::VidgenResult;
@@ -82,6 +83,9 @@ fn apply_format_overrides(scene: &Scene, fmt_name: &str) -> Scene {
             frontmatter: SceneFrontmatter {
                 template: scene.frontmatter.template.clone(),
                 duration: scene.frontmatter.duration.clone(),
+                video_source: scene.frontmatter.video_source.clone(),
+                source_volume: scene.frontmatter.source_volume,
+                sub_scenes: scene.frontmatter.sub_scenes.clone(),
                 props: scene.frontmatter.props.clone(),
                 background: scene.frontmatter.background.as_ref().map(|bg| {
                     crate::scene::BackgroundConfig {
@@ -126,6 +130,9 @@ fn apply_format_overrides(scene: &Scene, fmt_name: &str) -> Scene {
                 frontmatter: SceneFrontmatter {
                     template: scene.frontmatter.template.clone(),
                     duration: scene.frontmatter.duration.clone(),
+                    video_source: scene.frontmatter.video_source.clone(),
+                    source_volume: scene.frontmatter.source_volume,
+                    sub_scenes: scene.frontmatter.sub_scenes.clone(),
                     props,
                     background,
                     transition_in: scene.frontmatter.transition_in.clone(),
@@ -326,6 +333,37 @@ pub async fn render_project(
         .iter()
         .enumerate()
         .map(|(i, scene)| {
+            // For sequence scenes, sum resolved sub-scene durations
+            if scene.is_sequence() {
+                let sub_scenes = scene.frontmatter.sub_scenes.as_ref().unwrap();
+                match crate::scene::resolve_sub_scene_durations(
+                    sub_scenes,
+                    tts_durations[i],
+                    config.voice.padding_before,
+                    config.voice.padding_after,
+                    config.voice.auto_fallback_duration,
+                ) {
+                    Ok(durs) => return durs.iter().sum(),
+                    Err(e) => {
+                        eprintln!("  Scene {}: sub-scene duration error ({}), using fallback", i + 1, e);
+                    }
+                }
+            }
+            // For video-clip scenes with auto duration, probe the source video
+            if scene.is_video_clip() && scene.frontmatter.duration.is_auto() {
+                if let Some(ref src) = scene.frontmatter.video_source {
+                    let resolved = crate::scene::resolve_asset_path(src, project_path);
+                    match encoder::probe_video_duration(&resolved) {
+                        Ok(dur) => return dur,
+                        Err(e) => {
+                            eprintln!(
+                                "  Scene {}: could not probe video duration ({}), using fallback",
+                                i + 1, e
+                            );
+                        }
+                    }
+                }
+            }
             scene.frontmatter.duration.resolve(
                 tts_durations[i],
                 config.voice.padding_before,
@@ -337,7 +375,9 @@ pub async fn render_project(
 
     for (i, (scene, &dur)) in scenes.iter().zip(effective_durations.iter()).enumerate() {
         if scene.frontmatter.duration.is_auto() {
-            let source = if tts_durations[i].is_some() {
+            let source = if scene.is_video_clip() {
+                "video probe"
+            } else if tts_durations[i].is_some() {
                 "TTS + padding"
             } else {
                 "fallback"
@@ -495,6 +535,8 @@ pub async fn render_project(
         let scenes_ref = &fmt_scenes;
         let audio_delays_ref = &audio_delays;
         let content_paddings_ref = &content_paddings_after;
+        let tts_durations_ref = &tts_durations;
+        let voice_config_ref = &config.voice;
         let project_path_ref = project_path;
 
         // Render scenes concurrently with bounded parallelism
@@ -507,26 +549,88 @@ pub async fn render_project(
                 let music = &prep_ref[i].2;
                 let music_volume = prep_ref[i].3;
                 let dur = durations_ref[i];
-                let path = browser::capture_scene_frames(
-                    browser_ref,
-                    scene,
-                    i,
-                    registry_ref,
-                    theme_ref,
-                    *width,
-                    *height,
-                    fps,
-                    platform_ref,
-                    scene_output,
-                    audio.as_deref(),
-                    music.as_deref(),
-                    music_volume,
-                    dur,
-                    audio_delays_ref[i],
-                    content_paddings_ref[i],
-                    Some(project_path_ref),
-                )
-                .await?;
+
+                let path = if scene.is_sequence() {
+                    // Sequence scene: render sub-scenes, concatenate, mix audio
+                    let sub_scenes = scene.frontmatter.sub_scenes.as_ref().unwrap();
+                    let sub_durs = crate::scene::resolve_sub_scene_durations(
+                        sub_scenes,
+                        tts_durations_ref[i],
+                        voice_config_ref.padding_before,
+                        voice_config_ref.padding_after,
+                        voice_config_ref.auto_fallback_duration,
+                    ).map_err(|e| crate::error::VidgenError::Other(
+                        format!("Sequence duration error: {e}"),
+                    ))?;
+                    sequence::render_sequence_scene(
+                        browser_ref,
+                        scene,
+                        i,
+                        registry_ref,
+                        theme_ref,
+                        *width,
+                        *height,
+                        fps,
+                        platform_ref,
+                        scene_output,
+                        audio.as_deref(),
+                        music.as_deref(),
+                        music_volume,
+                        &sub_durs,
+                        audio_delays_ref[i],
+                        project_path_ref,
+                    )
+                    .await?
+                } else if scene.is_video_clip() {
+                    // Video-clip scene: re-encode external video instead of browser rendering
+                    let video_src = scene.frontmatter.video_source.as_ref().unwrap();
+                    let resolved_src = crate::scene::resolve_asset_path(video_src, project_path_ref);
+                    eprintln!(
+                        "  Scene {}: video-clip ({:.1}s) from {}",
+                        i + 1, dur, resolved_src.display()
+                    );
+                    let trim_dur = match scene.frontmatter.duration {
+                        crate::scene::SceneDuration::Fixed(_) => Some(dur),
+                        crate::scene::SceneDuration::Auto => None, // use full clip duration
+                    };
+                    let source_vol = scene.frontmatter.source_volume.unwrap_or(0.0);
+                    encoder::prepare_video_clip(
+                        &resolved_src,
+                        scene_output,
+                        *width,
+                        *height,
+                        fps,
+                        trim_dur,
+                        platform_ref,
+                        audio.as_deref(),
+                        music.as_deref(),
+                        music_volume,
+                        audio_delays_ref[i],
+                        source_vol,
+                    )?
+                } else {
+                    // Normal HTML-rendered scene
+                    browser::capture_scene_frames(
+                        browser_ref,
+                        scene,
+                        i,
+                        registry_ref,
+                        theme_ref,
+                        *width,
+                        *height,
+                        fps,
+                        platform_ref,
+                        scene_output,
+                        audio.as_deref(),
+                        music.as_deref(),
+                        music_volume,
+                        dur,
+                        audio_delays_ref[i],
+                        content_paddings_ref[i],
+                        Some(project_path_ref),
+                    )
+                    .await?
+                };
                 let render_secs = scene_start.elapsed().as_secs_f64();
                 Ok::<_, crate::error::VidgenError>((i, path, dur, render_secs))
             })
@@ -566,6 +670,42 @@ pub async fn render_project(
             output_dir.join(format!("{project_slug}-{fmt_name}.mp4"))
         };
 
+        // Debug: save intermediate scene files for inspection
+        if std::env::var("VIDGEN_DEBUG").is_ok() {
+            let debug_dir = std::env::var("VIDGEN_DEBUG_DIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| output_dir.join("debug"));
+            let scene_debug_dir = debug_dir.join(fmt_name);
+            let _ = std::fs::create_dir_all(&scene_debug_dir);
+            for (i, f) in scene_files.iter().enumerate() {
+                let fallback = format!("scene-{i:02}");
+                let scene_name = scenes[i].source_path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(&fallback);
+                let dest = scene_debug_dir.join(format!("{scene_name}.mp4"));
+                let _ = std::fs::copy(f, &dest);
+            }
+            eprintln!(
+                "{} Debug scene files saved to {}",
+                "debug:".yellow().bold(),
+                scene_debug_dir.display()
+            );
+        }
+
+        // Probe actual MP4 durations for accurate xfade offsets.
+        // Per-scene MP4s may differ from theoretical durations (e.g., TTS audio
+        // longer than fixed scene duration extends the file).
+        let actual_durations: Vec<f64> = scene_files
+            .iter()
+            .enumerate()
+            .map(|(i, path)| {
+                match encoder::probe_video_duration(path) {
+                    Ok(dur) => dur,
+                    Err(_) => scene_durs[i], // fallback to theoretical
+                }
+            })
+            .collect();
+
         // Concatenate scenes
         if scene_files.len() > 1 {
             if has_transitions {
@@ -584,7 +724,7 @@ pub async fn render_project(
         }
         encoder::concat_scenes_with_transitions(
             &scene_files,
-            &scene_durs,
+            &actual_durations,
             &transitions,
             &output_path,
             &platform,

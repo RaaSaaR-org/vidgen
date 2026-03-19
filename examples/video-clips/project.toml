@@ -1,0 +1,8 @@
+[project]
+name = "Video Clips Demo"
+
+[voice]
+engine = "native"
+
+[video]
+fps = 30

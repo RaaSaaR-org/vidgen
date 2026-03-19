@@ -8,8 +8,71 @@ use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::cdp::browser_protocol::emulation::SetDeviceMetricsOverrideParams;
 use chromiumoxide::page::ScreenshotParams;
 use futures::StreamExt;
+use std::io::Write;
 use std::path::Path;
-use tracing::debug;
+use tracing::{debug, warn};
+
+/// Write HTML to a temporary file and return the handle + file:// URL.
+///
+/// Using file:// navigation (instead of `set_content`) gives the page a file://
+/// origin, enabling JavaScript `fetch()` for local assets — required for templates
+/// that load 3D models, fonts, or other binary assets via JS (e.g. Three.js).
+fn write_temp_html(html: &str) -> VidgenResult<(tempfile::NamedTempFile, String)> {
+    let mut temp = tempfile::Builder::new()
+        .prefix("vidgen_")
+        .suffix(".html")
+        .tempfile()
+        .map_err(|e| VidgenError::Browser(format!("Failed to create temp file: {e}")))?;
+
+    temp.write_all(html.as_bytes())
+        .map_err(|e| VidgenError::Browser(format!("Failed to write temp file: {e}")))?;
+    temp.flush()
+        .map_err(|e| VidgenError::Browser(format!("Failed to flush temp file: {e}")))?;
+
+    let url = format!("file://{}", temp.path().display());
+    Ok((temp, url))
+}
+
+/// Wait for the page to be fully loaded and ready for screenshots.
+///
+/// Handles two concerns:
+/// 1. Basic page load (`document.readyState === 'complete'`) — scripts from CDN etc.
+/// 2. Async template readiness (`window.__VIDGEN_READY__`) — for templates that load
+///    external resources asynchronously (e.g. Three.js loading a GLB model).
+///
+/// Templates opt into async readiness by setting `window.__VIDGEN_READY__ = false`
+/// at startup, then `= true` once resources are loaded. Templates that don't set
+/// this flag are considered ready as soon as the page loads.
+async fn wait_for_page_ready(page: &chromiumoxide::Page) -> VidgenResult<()> {
+    use std::time::{Duration, Instant};
+
+    let start = Instant::now();
+    let timeout = Duration::from_secs(30);
+
+    loop {
+        if start.elapsed() > timeout {
+            warn!("Page readiness timeout (30s) — proceeding with render");
+            return Ok(());
+        }
+
+        // Combined check: page loaded AND template ready (or no async flag set)
+        match page
+            .evaluate(
+                "document.readyState === 'complete' && window.__VIDGEN_READY__ !== false",
+            )
+            .await
+        {
+            Ok(result) => {
+                if result.into_value::<bool>().unwrap_or(false) {
+                    return Ok(());
+                }
+            }
+            Err(_) => {} // Page context not ready for JS yet (mid-navigation)
+        }
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
 
 /// Capture a single frame as PNG bytes. Launches a browser, renders the HTML,
 /// injects CSS custom properties, takes a screenshot, and returns PNG data.
@@ -25,8 +88,12 @@ pub async fn capture_single_frame(
 ) -> VidgenResult<Vec<u8>> {
     let (browser, handler_handle) = launch_browser(width, height).await?;
 
+    // Write HTML to temp file so the page gets a file:// origin,
+    // enabling JS fetch() for local assets (e.g., Three.js loading GLB models)
+    let (_temp_file, file_url) = write_temp_html(html)?;
+
     let page = browser
-        .new_page("about:blank")
+        .new_page(&file_url)
         .await
         .map_err(|e| VidgenError::Browser(format!("Failed to create page: {e}")))?;
 
@@ -39,9 +106,7 @@ pub async fn capture_single_frame(
     .await
     .map_err(|e| VidgenError::Browser(format!("Failed to set viewport: {e}")))?;
 
-    page.set_content(html)
-        .await
-        .map_err(|e| VidgenError::Browser(format!("Failed to set page content: {e}")))?;
+    wait_for_page_ready(&page).await?;
 
     // Inject CSS custom properties
     let progress = if total_frames > 0 {
@@ -82,10 +147,13 @@ pub async fn launch_browser(
         .window_size(width, height)
         .viewport(None) // We'll set viewport per-page via CDP
         .arg("--hide-scrollbars")
-        .arg("--disable-gpu")
+        // Note: --disable-gpu was removed to enable WebGL (Three.js, 3D models).
+        // Headless Chromium uses SwiftShader (software) on Linux or the system
+        // GPU on macOS — both produce deterministic screenshots.
         .arg("--no-sandbox")
         .arg("--disable-dev-shm-usage")
         .arg("--allow-file-access-from-files")
+        .arg("--allow-file-access")
         .build()
         .map_err(|e| VidgenError::Browser(format!("Failed to configure browser: {e}")))?;
 
@@ -152,6 +220,13 @@ pub async fn capture_scene_frames(
     let html_frame0 = registry.render_scene_html(scene, theme, width, height, 0, total_frames, project_path)?;
     let is_static = frame_cache::is_static_scene(&html_frame0);
 
+    // Load HTML via file:// URL (enables JS fetch for local assets like 3D models)
+    let (_temp_file, file_url) = write_temp_html(&html_frame0)?;
+    page.goto(&file_url)
+        .await
+        .map_err(|e| VidgenError::Browser(format!("Failed to navigate to scene HTML: {e}")))?;
+    wait_for_page_ready(&page).await?;
+
     if is_static {
         // Static scene: capture one frame, pipe it N times to the encoder.
         // This avoids FFmpeg's `-loop 1` flag which hangs on Apple Silicon
@@ -162,10 +237,6 @@ pub async fn capture_scene_frames(
             effective_duration
         );
 
-        page.set_content(&html_frame0)
-            .await
-            .map_err(|e| VidgenError::Browser(format!("Failed to set page content: {e}")))?;
-
         let screenshot = page
             .screenshot(ScreenshotParams::builder().full_page(false).build())
             .await
@@ -174,6 +245,7 @@ pub async fn capture_scene_frames(
         let mut encoder = SceneEncoder::new(
             output_path, fps, width, height, platform,
             audio_path, music_path, music_volume, audio_delay_secs,
+            Some(effective_duration),
         )?;
         for _ in 0..total_frames {
             encoder.write_frame(&screenshot)?;
@@ -196,6 +268,7 @@ pub async fn capture_scene_frames(
         music_path,
         music_volume,
         audio_delay_secs,
+        Some(effective_duration),
     )?;
 
     // Compute content-progress boundaries (voice window within full scene duration)
@@ -209,11 +282,8 @@ pub async fn capture_scene_frames(
         effective_duration
     );
 
-    // Load HTML once before the frame loop — the template output is identical
+    // HTML already loaded via page.goto() above — the template output is identical
     // across frames; only the CSS custom properties change (injected via JS below).
-    page.set_content(&html_frame0)
-        .await
-        .map_err(|e| VidgenError::Browser(format!("Failed to set page content: {e}")))?;
 
     for frame in 0..total_frames {
         // Inject CSS custom properties via JavaScript for dynamic animation

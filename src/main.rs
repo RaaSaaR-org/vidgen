@@ -18,12 +18,39 @@ use error::VidgenResult;
 async fn main() {
     let cli = Cli::parse();
 
-    // Initialize tracing for non-MCP commands, gated on RUST_LOG env var
-    if !matches!(cli.command, Command::Mcp) && std::env::var("RUST_LOG").is_ok() {
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-            .with_writer(std::io::stderr)
-            .try_init();
+    // Initialize tracing based on CLI flags (not for MCP — would corrupt stdio JSON)
+    if !matches!(cli.command, Command::Mcp) {
+        let log_level = if cli.debug {
+            Some("debug")
+        } else if cli.verbose {
+            Some("info")
+        } else {
+            // Respect RUST_LOG env var as fallback
+            std::env::var("RUST_LOG").ok().map(|_| "")
+        };
+
+        if let Some(level) = log_level {
+            let filter = if level.is_empty() {
+                // RUST_LOG env var is set — use it directly
+                tracing_subscriber::EnvFilter::from_default_env()
+            } else {
+                // CLI flag — set vidgen-specific level
+                tracing_subscriber::EnvFilter::new(format!("vidgen={level}"))
+            };
+
+            let _ = tracing_subscriber::fmt()
+                .with_env_filter(filter)
+                .with_writer(std::io::stderr)
+                .try_init();
+        }
+    }
+
+    // Export debug settings as env vars so the render pipeline can access them
+    if cli.debug {
+        std::env::set_var("VIDGEN_DEBUG", "1");
+    }
+    if let Some(ref dir) = cli.debug_dir {
+        std::env::set_var("VIDGEN_DEBUG_DIR", dir.as_os_str());
     }
 
     if let Err(e) = run(cli).await {
@@ -75,6 +102,8 @@ async fn run(cli: Cli) -> VidgenResult<()> {
             render,
             scene,
         } => commands::watch::run(&path, render, scene).await,
+        #[cfg(any(feature = "clipper", feature = "youtube"))]
+        Command::Clip { action } => commands::clip::run(action).await,
         Command::QuickRender {
             template,
             output,

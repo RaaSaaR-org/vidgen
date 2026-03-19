@@ -120,6 +120,7 @@ impl SceneEncoder {
         music_path: Option<&Path>,
         music_volume: f64,
         audio_delay_secs: f64,
+        effective_duration: Option<f64>,
     ) -> VidgenResult<Self> {
         let mut cmd = Command::new("ffmpeg");
         cmd.args([
@@ -173,16 +174,13 @@ impl SceneEncoder {
                 };
                 let filter = format!(
                     "{voice_chain};[2:a]volume={music_volume:.2}[music];\
-                     [voice][music]amix=inputs=2:duration=first:dropout_transition=2[aout]"
+                     [voice][music]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]"
                 );
                 cmd.args(["-filter_complex", &filter, "-map", "0:v", "-map", "[aout]"]);
                 cmd.args([
-                    "-c:a",
-                    "aac",
-                    "-b:a",
-                    platform.audio_bitrate,
-                    "-ar",
-                    &platform.audio_samplerate.to_string(),
+                    "-c:a", "aac", "-ac", "2",
+                    "-b:a", platform.audio_bitrate,
+                    "-ar", &platform.audio_samplerate.to_string(),
                 ]);
             }
             (true, false) => {
@@ -190,12 +188,9 @@ impl SceneEncoder {
                     cmd.args(["-af", &format!("adelay={delay_ms}|{delay_ms}")]);
                 }
                 cmd.args([
-                    "-c:a",
-                    "aac",
-                    "-b:a",
-                    platform.audio_bitrate,
-                    "-ar",
-                    &platform.audio_samplerate.to_string(),
+                    "-c:a", "aac", "-ac", "2",
+                    "-b:a", platform.audio_bitrate,
+                    "-ar", &platform.audio_samplerate.to_string(),
                 ]);
             }
             (false, true) => {
@@ -203,15 +198,18 @@ impl SceneEncoder {
                 let filter = format!("[1:a]volume={music_volume:.2}[aout]");
                 cmd.args(["-filter_complex", &filter, "-map", "0:v", "-map", "[aout]"]);
                 cmd.args([
-                    "-c:a",
-                    "aac",
-                    "-b:a",
-                    platform.audio_bitrate,
-                    "-ar",
-                    &platform.audio_samplerate.to_string(),
+                    "-c:a", "aac", "-ac", "2",
+                    "-b:a", platform.audio_bitrate,
+                    "-ar", &platform.audio_samplerate.to_string(),
                 ]);
             }
             (false, false) => {}
+        }
+
+        // Force exact output duration to match the video frames.
+        // This prevents TTS audio longer than the scene from extending the MP4.
+        if let Some(dur) = effective_duration {
+            cmd.args(["-t", &format!("{dur:.3}")]);
         }
 
         cmd.arg(output_path.as_os_str());
@@ -291,35 +289,81 @@ impl SceneEncoder {
     }
 }
 
-/// Concatenate multiple MP4 files using FFmpeg's concat demuxer.
+/// Concatenate multiple MP4 files using FFmpeg's concat filter.
+/// Uses the filter (not demuxer) to properly handle audio timestamp continuity
+/// across scene boundaries. Re-encodes both video and audio for seamless output.
 pub fn concat_scenes(scene_files: &[PathBuf], output_path: &Path) -> VidgenResult<()> {
     if scene_files.len() == 1 {
-        // Single scene: just copy it
         std::fs::copy(&scene_files[0], output_path)?;
         return Ok(());
     }
 
-    // Write concat list file
-    let concat_dir = output_path.parent().unwrap_or(Path::new("."));
-    let concat_list_path = concat_dir.join(".vidgen-concat-list.txt");
-    let mut concat_content = String::new();
-    for path in scene_files {
-        concat_content.push_str(&format!("file '{}'\n", path.display()));
-    }
-    std::fs::write(&concat_list_path, &concat_content)?;
+    let n = scene_files.len();
+    let any_audio = scene_files.iter().any(|f| has_audio_stream(f));
 
-    let output = Command::new("ffmpeg")
-        .args(["-y", "-f", "concat", "-safe", "0", "-i"])
-        .arg(&concat_list_path)
-        .args(["-c", "copy"])
-        .arg(output_path)
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
+    let mut cmd = Command::new("ffmpeg");
+    cmd.arg("-y");
+
+    // Add all input files
+    for file in scene_files {
+        cmd.args(["-i"]).arg(file.as_os_str());
+    }
+
+    // Build concat filter — generates silence for inputs missing audio
+    let mut filter_parts: Vec<String> = Vec::new();
+
+    for (i, file) in scene_files.iter().enumerate() {
+        if any_audio && !has_audio_stream(file) {
+            // Generate silence for this input to match its video duration
+            let dur = probe_video_duration(file).unwrap_or(3.0);
+            filter_parts.push(format!(
+                "anullsrc=cl=stereo:r=44100[silence{i}];[silence{i}]atrim=0:{dur:.3},asetpts=PTS-STARTPTS[a{i}]"
+            ));
+        } else if any_audio {
+            filter_parts.push(format!(
+                "[{i}:a]aformat=sample_rates=44100:channel_layouts=stereo,asetpts=PTS-STARTPTS[a{i}]"
+            ));
+        }
+    }
+
+    // Concat filter
+    let inputs: String = (0..n)
+        .map(|i| {
+            if any_audio {
+                format!("[{i}:v][a{i}]")
+            } else {
+                format!("[{i}:v]")
+            }
+        })
+        .collect();
+
+    let a_flag = if any_audio { 1 } else { 0 };
+    filter_parts.push(format!(
+        "{inputs}concat=n={n}:v=1:a={a_flag}[vout]{}",
+        if any_audio { "[aout]" } else { "" }
+    ));
+
+    let filter = filter_parts.join(";");
+    cmd.args(["-filter_complex", &filter, "-map", "[vout]"]);
+
+    if any_audio {
+        cmd.args([
+            "-map", "[aout]",
+            "-c:a", "aac", "-ac", "2", "-ar", "44100", "-b:a", "192k",
+        ]);
+    }
+
+    cmd.args([
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "23", "-preset", "fast",
+        "-movflags", "+faststart",
+    ]);
+    cmd.arg(output_path.as_os_str());
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::piped());
+
+    let output = cmd
         .output()
         .map_err(|e| VidgenError::Ffmpeg(format!("Failed to spawn ffmpeg concat: {e}")))?;
-
-    // Clean up concat list
-    let _ = std::fs::remove_file(&concat_list_path);
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -425,15 +469,17 @@ pub fn concat_scenes_with_transitions(
         // For scenes without audio, generate silence matching the scene duration.
         // Use anullsrc → atrim to produce a silent segment, then normalize all
         // audio streams to the same format before crossfading.
+        // Use platform sample rate for consistency with per-scene encoding.
+        let sr = platform.audio_samplerate;
         for (i, (&has, dur)) in has_audio.iter().zip(scene_durations.iter()).enumerate() {
             if !has {
                 filter_parts.push(format!(
-                    "anullsrc=cl=stereo:r=22050[silence{i}];[silence{i}]atrim=0:{dur:.3},asetpts=PTS-STARTPTS[sa{i}]"
+                    "anullsrc=cl=stereo:r={sr}[silence{i}];[silence{i}]atrim=0:{dur:.3},asetpts=PTS-STARTPTS[sa{i}]"
                 ));
             } else {
                 // Normalize existing audio to consistent format
                 filter_parts.push(format!(
-                    "[{i}:a]aformat=sample_rates=22050:channel_layouts=stereo,asetpts=PTS-STARTPTS[sa{i}]"
+                    "[{i}:a]aformat=sample_rates={sr}:channel_layouts=stereo,asetpts=PTS-STARTPTS[sa{i}]"
                 ));
             }
         }
@@ -494,12 +540,9 @@ pub fn concat_scenes_with_transitions(
 
     if any_audio {
         cmd.args([
-            "-c:a",
-            "aac",
-            "-b:a",
-            platform.audio_bitrate,
-            "-ar",
-            &platform.audio_samplerate.to_string(),
+            "-c:a", "aac", "-ac", "2",
+            "-b:a", platform.audio_bitrate,
+            "-ar", &platform.audio_samplerate.to_string(),
         ]);
     }
 
@@ -515,6 +558,290 @@ pub fn concat_scenes_with_transitions(
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(VidgenError::Ffmpeg(format!(
             "FFmpeg xfade concat failed: {}",
+            stderr.lines().last().unwrap_or("unknown error")
+        )));
+    }
+
+    Ok(())
+}
+
+/// Probe the duration of a video file in seconds using ffprobe.
+pub fn probe_video_duration(path: &Path) -> VidgenResult<f64> {
+    let output = Command::new("ffprobe")
+        .args([
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "csv=p=0",
+        ])
+        .arg(path.as_os_str())
+        .output()
+        .map_err(|e| VidgenError::Ffmpeg(format!("Failed to run ffprobe: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(VidgenError::Ffmpeg(format!(
+            "ffprobe failed for {}: {}",
+            path.display(),
+            stderr.lines().last().unwrap_or("unknown error")
+        )));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| VidgenError::Ffmpeg(format!(
+            "Could not parse duration from ffprobe output: '{}'",
+            stdout.trim()
+        )))
+}
+
+/// Re-encode an external video clip to match the target format dimensions and codec.
+///
+/// Scales the video to fit within `width x height` (with padding if aspect ratios differ),
+/// trims to `duration` seconds if specified, and encodes with the given platform preset.
+/// Optionally mixes in voice audio and/or background music.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_video_clip(
+    source_path: &Path,
+    output_path: &Path,
+    width: u32,
+    height: u32,
+    fps: u32,
+    duration: Option<f64>,
+    platform: &PlatformPreset,
+    audio_path: Option<&Path>,
+    music_path: Option<&Path>,
+    music_volume: f64,
+    audio_delay_secs: f64,
+    source_volume: f64,
+) -> VidgenResult<PathBuf> {
+    let mut cmd = Command::new("ffmpeg");
+    cmd.arg("-y");
+
+    // Input: source video (input 0)
+    cmd.args(["-i"]).arg(source_path.as_os_str());
+
+    // Optional trim
+    if let Some(dur) = duration {
+        cmd.args(["-t", &format!("{dur:.3}")]);
+    }
+
+    // Additional audio inputs
+    let has_voice = audio_path.is_some();
+    let has_music = music_path.is_some();
+    let has_source_audio = source_volume > 0.0 && has_audio_stream(source_path);
+
+    if let Some(audio) = audio_path {
+        cmd.args(["-i"]).arg(audio.as_os_str()); // input 1 (if voice)
+    }
+    if let Some(music) = music_path {
+        cmd.args(["-i"]).arg(music.as_os_str()); // input 2 (if voice+music) or 1 (if music only)
+    }
+
+    // Video filter: scale + pad to target dimensions + force fps for xfade compat
+    let vf = format!(
+        "fps={fps},scale={width}:{height}:force_original_aspect_ratio=decrease,\
+         pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black"
+    );
+
+    // Build filter graph based on audio sources:
+    // - source audio from the clip (ducked to source_volume)
+    // - voice audio from TTS
+    // - background music
+    let delay_ms = (audio_delay_secs * 1000.0).round() as u64;
+
+    // Input indices: 0=source video/audio, then voice, then music
+    let voice_idx = if has_voice { 1 } else { 0 };
+    let music_idx = if has_voice && has_music { 2 } else if has_music { 1 } else { 0 };
+
+    // Helper: build voice filter chain with optional delay
+    let voice_chain = |label: &str| -> String {
+        if delay_ms > 0 {
+            format!("[{voice_idx}:a]adelay={delay_ms}|{delay_ms},volume=1.0{label}")
+        } else {
+            format!("[{voice_idx}:a]volume=1.0{label}")
+        }
+    };
+
+    // Collect audio streams to mix
+    let mut filter_parts: Vec<String> = vec![format!("[0:v]{vf}[vout]")];
+    let mut mix_labels: Vec<String> = Vec::new();
+
+    if has_voice {
+        filter_parts.push(voice_chain("[voice]"));
+        mix_labels.push("[voice]".into());
+    }
+    if has_source_audio {
+        filter_parts.push(format!("[0:a]volume={source_volume:.2}[src]"));
+        mix_labels.push("[src]".into());
+    }
+    if has_music {
+        filter_parts.push(format!("[{music_idx}:a]volume={music_volume:.2}[music]"));
+        mix_labels.push("[music]".into());
+    }
+
+    let has_any_audio = !mix_labels.is_empty();
+
+    if mix_labels.len() > 1 {
+        // Mix multiple audio streams
+        let inputs = mix_labels.len();
+        let labels = mix_labels.join("");
+        filter_parts.push(format!(
+            "{labels}amix=inputs={inputs}:duration=longest:dropout_transition=2:normalize=0[aout]"
+        ));
+        let filter = filter_parts.join(";");
+        cmd.args(["-filter_complex", &filter, "-map", "[vout]", "-map", "[aout]"]);
+    } else if mix_labels.len() == 1 {
+        // Single audio stream — rename to [aout]
+        // Replace the last label with [aout]
+        let last = filter_parts.last_mut().unwrap();
+        let label = &mix_labels[0];
+        *last = last.replace(label, "[aout]");
+        let filter = filter_parts.join(";");
+        cmd.args(["-filter_complex", &filter, "-map", "[vout]", "-map", "[aout]"]);
+    } else {
+        // No audio at all
+        cmd.args(["-vf", &vf, "-map", "0:v"]);
+    }
+
+    cmd.args([
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-crf", &platform.crf.to_string(),
+        "-preset", platform.preset,
+        "-movflags", "+faststart",
+    ]);
+
+    if has_any_audio {
+        cmd.args([
+            "-c:a", "aac", "-ac", "2",
+            "-b:a", platform.audio_bitrate,
+            "-ar", &platform.audio_samplerate.to_string(),
+        ]);
+    }
+
+    cmd.arg(output_path.as_os_str());
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::piped());
+
+    debug!(
+        "Preparing video clip: {} → {} ({}x{})",
+        source_path.display(),
+        output_path.display(),
+        width,
+        height
+    );
+
+    let output = cmd
+        .output()
+        .map_err(|e| VidgenError::Ffmpeg(format!("Failed to spawn ffmpeg for video clip: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(VidgenError::Ffmpeg(format!(
+            "FFmpeg video clip encoding failed: {}",
+            stderr.lines().last().unwrap_or("unknown error")
+        )));
+    }
+
+    Ok(output_path.to_path_buf())
+}
+
+/// Mix voiceover and/or music onto a video file (post-process).
+/// The video may already have audio (e.g., from source clips in a sequence).
+/// Renames the original to a temp file, re-encodes with audio mix, then removes the temp.
+#[allow(clippy::too_many_arguments)]
+pub fn mix_audio_onto_video(
+    video_path: &Path,
+    voice_path: Option<&Path>,
+    music_path: Option<&Path>,
+    music_volume: f64,
+    voice_delay_secs: f64,
+    platform: &PlatformPreset,
+) -> VidgenResult<()> {
+    if voice_path.is_none() && music_path.is_none() {
+        return Ok(());
+    }
+
+    let tmp_path = video_path.with_extension("mix-tmp.mp4");
+    std::fs::rename(video_path, &tmp_path)?;
+
+    let has_existing_audio = has_audio_stream(&tmp_path);
+    let has_voice = voice_path.is_some();
+    let has_music = music_path.is_some();
+    let delay_ms = (voice_delay_secs * 1000.0).round() as u64;
+
+    let mut cmd = Command::new("ffmpeg");
+    cmd.arg("-y");
+    cmd.args(["-i"]).arg(&tmp_path); // input 0: video (+ existing audio)
+
+    let mut next_input = 1;
+    let voice_idx = if has_voice {
+        cmd.args(["-i"]).arg(voice_path.unwrap().as_os_str());
+        let idx = next_input;
+        next_input += 1;
+        Some(idx)
+    } else {
+        None
+    };
+    let music_idx = if has_music {
+        cmd.args(["-i"]).arg(music_path.unwrap().as_os_str());
+        let idx = next_input;
+        Some(idx)
+    } else {
+        None
+    };
+
+    // Build audio mix filter
+    let mut filter_parts: Vec<String> = Vec::new();
+    let mut mix_labels: Vec<String> = Vec::new();
+
+    if has_existing_audio {
+        filter_parts.push("[0:a]volume=1.0[existing]".into());
+        mix_labels.push("[existing]".into());
+    }
+    if let Some(vi) = voice_idx {
+        if delay_ms > 0 {
+            filter_parts.push(format!("[{vi}:a]adelay={delay_ms}|{delay_ms},volume=1.0[voice]"));
+        } else {
+            filter_parts.push(format!("[{vi}:a]volume=1.0[voice]"));
+        }
+        mix_labels.push("[voice]".into());
+    }
+    if let Some(mi) = music_idx {
+        filter_parts.push(format!("[{mi}:a]volume={music_volume:.2}[music]"));
+        mix_labels.push("[music]".into());
+    }
+
+    let inputs = mix_labels.len();
+    let labels = mix_labels.join("");
+    filter_parts.push(format!(
+        "{labels}amix=inputs={inputs}:duration=longest:dropout_transition=2:normalize=0[aout]"
+    ));
+
+    let filter = filter_parts.join(";");
+    cmd.args(["-filter_complex", &filter, "-map", "0:v", "-map", "[aout]"]);
+    cmd.args([
+        "-c:v", "copy", // keep video as-is
+        "-c:a", "aac", "-ac", "2",
+        "-b:a", platform.audio_bitrate,
+        "-ar", &platform.audio_samplerate.to_string(),
+    ]);
+    cmd.arg(video_path.as_os_str());
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::piped());
+
+    let output = cmd
+        .output()
+        .map_err(|e| VidgenError::Ffmpeg(format!("Failed to mix audio: {e}")))?;
+
+    let _ = std::fs::remove_file(&tmp_path);
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(VidgenError::Ffmpeg(format!(
+            "FFmpeg audio mix failed: {}",
             stderr.lines().last().unwrap_or("unknown error")
         )));
     }

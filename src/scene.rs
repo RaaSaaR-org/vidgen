@@ -209,11 +209,94 @@ pub struct SceneAudioConfig {
     pub music_volume: Option<f64>,
 }
 
+/// A visual sub-scene within a `sequence` scene.
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct SubScene {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_volume: Option<f64>,
+    #[serde(default)]
+    pub duration: SceneDuration,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub props: HashMap<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<BackgroundConfig>,
+}
+
+impl SubScene {
+    pub fn is_video_clip(&self) -> bool {
+        self.video_source.is_some()
+    }
+}
+
+/// Resolve sub-scene durations given the total available time.
+///
+/// At most one sub-scene may have `duration: auto` — it fills the remaining time.
+/// Returns a vector of resolved durations in seconds.
+pub fn resolve_sub_scene_durations(
+    sub_scenes: &[SubScene],
+    total_tts_duration: Option<f64>,
+    padding_before: f64,
+    padding_after: f64,
+    fallback: f64,
+) -> Result<Vec<f64>, VidgenError> {
+    let total_available = match total_tts_duration {
+        Some(d) => d + padding_before + padding_after,
+        None => fallback,
+    };
+
+    let mut auto_idx: Option<usize> = None;
+    let mut fixed_sum = 0.0;
+
+    for (i, sub) in sub_scenes.iter().enumerate() {
+        match &sub.duration {
+            SceneDuration::Auto => {
+                if auto_idx.is_some() {
+                    return Err(VidgenError::Other(
+                        "Only one sub-scene in a sequence may have duration: auto".into(),
+                    ));
+                }
+                auto_idx = Some(i);
+            }
+            SceneDuration::Fixed(d) => {
+                fixed_sum += d;
+            }
+        }
+    }
+
+    let mut durations = Vec::with_capacity(sub_scenes.len());
+    for (i, sub) in sub_scenes.iter().enumerate() {
+        if Some(i) == auto_idx {
+            let remaining = (total_available - fixed_sum).max(0.5);
+            durations.push(remaining);
+        } else if let SceneDuration::Fixed(d) = &sub.duration {
+            durations.push(*d);
+        } else {
+            unreachable!();
+        }
+    }
+
+    Ok(durations)
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SceneFrontmatter {
+    #[serde(default)]
     pub template: String,
     #[serde(default)]
     pub duration: SceneDuration,
+    /// External video file path (for video-clip scenes). Supports @assets/ prefix and URLs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_source: Option<String>,
+    /// Volume of the video clip's original audio (0.0 = mute, 1.0 = full). Default: muted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_volume: Option<f64>,
+    /// Sub-scenes for sequence scenes. Voiceover spans all sub-scenes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sub_scenes: Option<Vec<SubScene>>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub props: HashMap<String, serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -241,7 +324,7 @@ pub struct FormatOverride {
     pub background: Option<BackgroundConfig>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, schemars::JsonSchema)]
 pub struct BackgroundConfig {
     pub color: Option<String>,
     pub image: Option<String>,
@@ -255,6 +338,16 @@ pub struct Scene {
 }
 
 impl Scene {
+    /// Returns true if this scene uses an external video clip rather than HTML rendering.
+    pub fn is_video_clip(&self) -> bool {
+        self.frontmatter.video_source.is_some()
+    }
+
+    /// Returns true if this is a sequence scene with sub-scenes.
+    pub fn is_sequence(&self) -> bool {
+        self.frontmatter.sub_scenes.as_ref().is_some_and(|s| !s.is_empty())
+    }
+
     /// Compute total frames for a given effective duration (in seconds).
     pub fn total_frames_for_duration(effective_duration: f64, fps: u32) -> u32 {
         (effective_duration * fps as f64).ceil() as u32
@@ -306,6 +399,43 @@ pub fn parse_scene(content: &str, path: &Path) -> VidgenResult<Scene> {
             return Err(VidgenError::SceneParse {
                 path: path.to_path_buf(),
                 message: format!("Invalid duration: {d}. Must be > 0."),
+            });
+        }
+    }
+
+    // Validate sub_scenes
+    if let Some(ref subs) = frontmatter.sub_scenes {
+        let auto_count = subs.iter().filter(|s| s.duration.is_auto()).count();
+        if auto_count > 1 {
+            return Err(VidgenError::SceneParse {
+                path: path.to_path_buf(),
+                message: "At most one sub-scene may have duration: auto".into(),
+            });
+        }
+        for (i, sub) in subs.iter().enumerate() {
+            if sub.template.is_none() && sub.video_source.is_none() {
+                return Err(VidgenError::SceneParse {
+                    path: path.to_path_buf(),
+                    message: format!("Sub-scene {i} must have either 'template' or 'video_source'"),
+                });
+            }
+            if let Some(sv) = &sub.source_volume {
+                if !(*sv >= 0.0 && *sv <= 1.0) {
+                    return Err(VidgenError::SceneParse {
+                        path: path.to_path_buf(),
+                        message: format!("Sub-scene {i}: source_volume {sv} must be 0.0-1.0"),
+                    });
+                }
+            }
+        }
+    }
+
+    // Validate source_volume range
+    if let Some(sv) = &frontmatter.source_volume {
+        if !(*sv >= 0.0 && *sv <= 1.0) {
+            return Err(VidgenError::SceneParse {
+                path: path.to_path_buf(),
+                message: format!("Invalid source_volume: {sv}. Must be between 0.0 and 1.0."),
             });
         }
     }
@@ -614,6 +744,142 @@ mod tests {
     fn test_total_frames_for_duration() {
         assert_eq!(Scene::total_frames_for_duration(5.0, 30), 150);
         assert_eq!(Scene::total_frames_for_duration(2.5, 60), 150);
+    }
+
+    #[test]
+    fn test_parse_video_clip_scene() {
+        let content = r#"---
+video_source: "@assets/clips/intro.mp4"
+duration: 5.5
+transition_in: fade
+---
+Optional voiceover text."#;
+        let scene = parse_scene(content, Path::new("test.md")).unwrap();
+        assert!(scene.is_video_clip());
+        assert_eq!(
+            scene.frontmatter.video_source.as_deref(),
+            Some("@assets/clips/intro.mp4")
+        );
+        assert_eq!(scene.frontmatter.duration, SceneDuration::Fixed(5.5));
+        assert_eq!(scene.frontmatter.transition_in.as_deref(), Some("fade"));
+    }
+
+    #[test]
+    fn test_parse_video_clip_auto_duration() {
+        let content = "---\nvideo_source: \"@assets/clips/scroll.mp4\"\n---\n";
+        let scene = parse_scene(content, Path::new("test.md")).unwrap();
+        assert!(scene.is_video_clip());
+        assert_eq!(scene.frontmatter.duration, SceneDuration::Auto);
+    }
+
+    #[test]
+    fn test_parse_video_clip_source_volume() {
+        let content = "---\nvideo_source: \"@assets/clips/intro.mp4\"\nsource_volume: 0.3\n---\nVoiceover.";
+        let scene = parse_scene(content, Path::new("test.md")).unwrap();
+        assert_eq!(scene.frontmatter.source_volume, Some(0.3));
+    }
+
+    #[test]
+    fn test_source_volume_default_none() {
+        let content = "---\ntemplate: title-card\n---\nText.";
+        let scene = parse_scene(content, Path::new("test.md")).unwrap();
+        assert!(scene.frontmatter.source_volume.is_none());
+    }
+
+    #[test]
+    fn test_source_volume_invalid() {
+        let content = "---\nvideo_source: \"x.mp4\"\nsource_volume: 1.5\n---\n";
+        assert!(parse_scene(content, Path::new("test.md")).is_err());
+    }
+
+    #[test]
+    fn test_is_not_video_clip() {
+        let content = "---\ntemplate: title-card\n---\nText.";
+        let scene = parse_scene(content, Path::new("test.md")).unwrap();
+        assert!(!scene.is_video_clip());
+    }
+
+    #[test]
+    fn test_parse_sequence_scene() {
+        let content = r#"---
+template: sequence
+sub_scenes:
+  - template: title-card
+    duration: 3
+    props:
+      title: "Hello"
+  - video_source: "@assets/clips/demo.mp4"
+    duration: 4
+    source_volume: 0.2
+  - template: content-text
+    duration: auto
+    props:
+      heading: "End"
+---
+This narration spans all sub-scenes."#;
+        let scene = parse_scene(content, Path::new("test.md")).unwrap();
+        assert!(scene.is_sequence());
+        let subs = scene.frontmatter.sub_scenes.as_ref().unwrap();
+        assert_eq!(subs.len(), 3);
+        assert_eq!(subs[0].template.as_deref(), Some("title-card"));
+        assert!(subs[1].is_video_clip());
+        assert_eq!(subs[1].source_volume, Some(0.2));
+        assert!(subs[2].duration.is_auto());
+    }
+
+    #[test]
+    fn test_sequence_multiple_auto_rejected() {
+        let content = r#"---
+sub_scenes:
+  - template: title-card
+    duration: auto
+  - template: content-text
+    duration: auto
+---
+Text."#;
+        assert!(parse_scene(content, Path::new("test.md")).is_err());
+    }
+
+    #[test]
+    fn test_sequence_sub_scene_no_template_or_source() {
+        let content = r#"---
+sub_scenes:
+  - duration: 3
+---
+Text."#;
+        assert!(parse_scene(content, Path::new("test.md")).is_err());
+    }
+
+    #[test]
+    fn test_resolve_sub_scene_durations() {
+        let subs = vec![
+            SubScene { template: Some("a".into()), video_source: None, source_volume: None, duration: SceneDuration::Fixed(3.0), props: HashMap::new(), background: None },
+            SubScene { template: Some("b".into()), video_source: None, source_volume: None, duration: SceneDuration::Fixed(4.0), props: HashMap::new(), background: None },
+            SubScene { template: Some("c".into()), video_source: None, source_volume: None, duration: SceneDuration::Auto, props: HashMap::new(), background: None },
+        ];
+        // TTS = 13s, padding = 0.5+0.5 = 1s, total = 14s. Fixed = 7s. Auto = 7s.
+        let durs = resolve_sub_scene_durations(&subs, Some(13.0), 0.5, 0.5, 5.0).unwrap();
+        assert_eq!(durs.len(), 3);
+        assert!((durs[0] - 3.0).abs() < 0.001);
+        assert!((durs[1] - 4.0).abs() < 0.001);
+        assert!((durs[2] - 7.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_resolve_sub_scene_durations_no_auto() {
+        let subs = vec![
+            SubScene { template: Some("a".into()), video_source: None, source_volume: None, duration: SceneDuration::Fixed(3.0), props: HashMap::new(), background: None },
+            SubScene { template: Some("b".into()), video_source: None, source_volume: None, duration: SceneDuration::Fixed(4.0), props: HashMap::new(), background: None },
+        ];
+        let durs = resolve_sub_scene_durations(&subs, Some(10.0), 0.5, 0.5, 5.0).unwrap();
+        assert!((durs[0] - 3.0).abs() < 0.001);
+        assert!((durs[1] - 4.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_is_sequence() {
+        let content = "---\ntemplate: title-card\n---\nText.";
+        assert!(!parse_scene(content, Path::new("t.md")).unwrap().is_sequence());
     }
 
     #[test]

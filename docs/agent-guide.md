@@ -129,6 +129,48 @@ And now let's summarize what we've seen.
 - Sub-scenes are joined with hard cuts (no transitions between them)
 - The sequence itself can have transitions to adjacent scenes
 
+## Overlays (lower thirds / info banners)
+
+Add info banners on top of any scene. Works on HTML scenes, video clips, and sequence sub-scenes:
+
+```yaml
+---
+video_source: "@assets/clips/interview.mp4"
+duration: auto
+overlay:
+  text: "Jane Smith"
+  subtext: "CEO, Acme Corp"
+  style: modern         # modern, minimal, news, gradient
+  position: bottom-left  # bottom-left, bottom-right, top-left, top-right
+  show_at: 0.5           # seconds (default: 0.5)
+  hide_at: 4.0           # seconds (default: scene_duration - 0.5)
+---
+```
+
+On sequence sub-scenes:
+
+```yaml
+sub_scenes:
+  - video_source: "@assets/clips/yt-clip.mp4"
+    duration: 4
+    overlay:
+      text: "Rick Astley"
+      subtext: "youtube.com"
+      style: news
+```
+
+**Styles:**
+- `modern` — frosted glass with accent color bar (default)
+- `minimal` — clean text on dark background
+- `news` — bold colored stripe, TV news style
+- `gradient` — gradient background bar
+
+**Best practices:**
+- Use overlays to show sources (URLs, video titles) on clip scenes
+- Use `news` style for breaking-news or interview name labels
+- `show_at`/`hide_at` default to 0.5s after start / 0.5s before end
+- Overlays fade in/out smoothly (0.3s alpha transition)
+
 ## Creating video clips
 
 ### Website scroll capture

@@ -73,7 +73,9 @@ my-video/
 
 **Video clip scenes:** `video_source` (path to MP4), `source_volume` (0.0-1.0, duck original audio)
 
-**Sequence scenes:** `sub_scenes` (array of sub-scene objects with `template`/`video_source`, `duration`, `props`, `source_volume`)
+**Sequence scenes:** `sub_scenes` (array of sub-scene objects with `template`/`video_source`, `duration`, `props`, `source_volume`, `overlay`)
+
+**Overlays (all scene types + sub-scenes):** `overlay` object with `text`, `subtext`, `show_at`, `hide_at`, `style` (modern/minimal/news/gradient), `position` (bottom-left/bottom-right/top-left/top-right). Rendered as transparent PNG via Chromium, composited via FFmpeg overlay filter with alpha fade
 
 ### Asset reference conventions
 
@@ -124,3 +126,4 @@ my-video/
 - Project-wide `[audio.background]` config with dB volume, fade_in, fade_out; per-scene audio.music overrides project default
 - Video clip scenes support `source_volume` for ducking original audio while voiceover plays
 - Sequence scenes allow a single voiceover to span multiple visual sub-scenes (HTML templates + video clips)
+- Overlays rendered as RGBA PNGs via Chromium (`omit_background: true`), composited via FFmpeg `overlay` filter with `loop` + `fade` alpha animations. Applied as post-process on per-scene MP4s (after render, before concat)

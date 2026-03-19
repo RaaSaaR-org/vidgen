@@ -149,6 +149,49 @@ And these are the key features we'll cover today.
 - Source audio from video clips is ducked while voiceover plays
 - The sequence outputs a single MP4 that participates in normal transitions
 
+## Overlays (lower thirds)
+
+Add info banners on top of any scene — show names, URLs, video titles, interview labels:
+
+```yaml
+---
+video_source: "@assets/clips/interview.mp4"
+duration: auto
+overlay:
+  text: "Jane Smith"
+  subtext: "CEO, Acme Corp"
+  style: modern
+  position: bottom-left
+  show_at: 0.5
+  hide_at: 4.0
+---
+```
+
+Overlays work on all scene types (HTML, video clips, sequence sub-scenes). They fade in/out smoothly and are rendered as transparent PNGs via Chromium, then composited via FFmpeg.
+
+**Built-in styles:**
+
+| Style | Look |
+|-------|------|
+| `modern` | Frosted glass with accent color bar (default) |
+| `minimal` | Clean text on subtle dark background |
+| `news` | Bold colored stripe, TV news style |
+| `gradient` | Gradient background bar |
+
+**Positions:** `bottom-left` (default), `bottom-right`, `top-left`, `top-right`
+
+Overlays on sequence sub-scenes:
+
+```yaml
+sub_scenes:
+  - video_source: "@assets/clips/demo.mp4"
+    duration: 4
+    overlay:
+      text: "Product Demo"
+      subtext: "myapp.com"
+      style: minimal
+```
+
 ## Video clip capture
 
 Capture clips directly from websites or YouTube for use in scenes:

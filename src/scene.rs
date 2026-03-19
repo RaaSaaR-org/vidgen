@@ -209,6 +209,36 @@ pub struct SceneAudioConfig {
     pub music_volume: Option<f64>,
 }
 
+/// Overlay/lower-third info banner that appears on top of a scene.
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct OverlayConfig {
+    /// Main text (name, title, URL, etc.)
+    pub text: String,
+    /// Secondary text (subtitle, role, description)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtext: Option<String>,
+    /// Time in seconds when overlay appears (default: 0.5)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_at: Option<f64>,
+    /// Time in seconds when overlay disappears (default: scene_duration - 0.5)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hide_at: Option<f64>,
+    /// Visual style: modern, minimal, news, gradient (default: modern)
+    #[serde(default = "default_overlay_style")]
+    pub style: String,
+    /// Position: bottom-left, bottom-right, top-left, top-right (default: bottom-left)
+    #[serde(default = "default_overlay_position")]
+    pub position: String,
+}
+
+fn default_overlay_style() -> String {
+    "modern".into()
+}
+
+fn default_overlay_position() -> String {
+    "bottom-left".into()
+}
+
 /// A visual sub-scene within a `sequence` scene.
 #[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct SubScene {
@@ -224,6 +254,8 @@ pub struct SubScene {
     pub props: HashMap<String, serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background: Option<BackgroundConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overlay: Option<OverlayConfig>,
 }
 
 impl SubScene {
@@ -297,6 +329,9 @@ pub struct SceneFrontmatter {
     /// Sub-scenes for sequence scenes. Voiceover spans all sub-scenes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sub_scenes: Option<Vec<SubScene>>,
+    /// Overlay/lower-third info banner displayed on top of the scene.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overlay: Option<OverlayConfig>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub props: HashMap<String, serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -427,6 +462,24 @@ pub fn parse_scene(content: &str, path: &Path) -> VidgenResult<Scene> {
                     });
                 }
             }
+        }
+    }
+
+    // Validate overlay config
+    if let Some(ref ov) = frontmatter.overlay {
+        let valid_styles = ["modern", "minimal", "news", "gradient"];
+        if !valid_styles.contains(&ov.style.as_str()) {
+            return Err(VidgenError::SceneParse {
+                path: path.to_path_buf(),
+                message: format!("Invalid overlay style '{}'. Valid: {}", ov.style, valid_styles.join(", ")),
+            });
+        }
+        let valid_positions = ["bottom-left", "bottom-right", "top-left", "top-right"];
+        if !valid_positions.contains(&ov.position.as_str()) {
+            return Err(VidgenError::SceneParse {
+                path: path.to_path_buf(),
+                message: format!("Invalid overlay position '{}'. Valid: {}", ov.position, valid_positions.join(", ")),
+            });
         }
     }
 
@@ -787,6 +840,50 @@ Optional voiceover text."#;
     }
 
     #[test]
+    fn test_parse_overlay_full() {
+        let content = r#"---
+template: title-card
+overlay:
+  text: "John Doe"
+  subtext: "CEO, Acme Corp"
+  show_at: 1.0
+  hide_at: 4.0
+  style: news
+  position: bottom-right
+---
+Text."#;
+        let scene = parse_scene(content, Path::new("test.md")).unwrap();
+        let ov = scene.frontmatter.overlay.as_ref().unwrap();
+        assert_eq!(ov.text, "John Doe");
+        assert_eq!(ov.subtext.as_deref(), Some("CEO, Acme Corp"));
+        assert_eq!(ov.show_at, Some(1.0));
+        assert_eq!(ov.style, "news");
+        assert_eq!(ov.position, "bottom-right");
+    }
+
+    #[test]
+    fn test_parse_overlay_minimal() {
+        let content = "---\ntemplate: title-card\noverlay:\n  text: \"example.com\"\n---\nText.";
+        let scene = parse_scene(content, Path::new("test.md")).unwrap();
+        let ov = scene.frontmatter.overlay.as_ref().unwrap();
+        assert_eq!(ov.text, "example.com");
+        assert_eq!(ov.style, "modern"); // default
+        assert_eq!(ov.position, "bottom-left"); // default
+    }
+
+    #[test]
+    fn test_overlay_invalid_style() {
+        let content = "---\ntemplate: title-card\noverlay:\n  text: x\n  style: fancy\n---\n";
+        assert!(parse_scene(content, Path::new("test.md")).is_err());
+    }
+
+    #[test]
+    fn test_overlay_invalid_position() {
+        let content = "---\ntemplate: title-card\noverlay:\n  text: x\n  position: center\n---\n";
+        assert!(parse_scene(content, Path::new("test.md")).is_err());
+    }
+
+    #[test]
     fn test_source_volume_invalid() {
         let content = "---\nvideo_source: \"x.mp4\"\nsource_volume: 1.5\n---\n";
         assert!(parse_scene(content, Path::new("test.md")).is_err());
@@ -853,9 +950,9 @@ Text."#;
     #[test]
     fn test_resolve_sub_scene_durations() {
         let subs = vec![
-            SubScene { template: Some("a".into()), video_source: None, source_volume: None, duration: SceneDuration::Fixed(3.0), props: HashMap::new(), background: None },
-            SubScene { template: Some("b".into()), video_source: None, source_volume: None, duration: SceneDuration::Fixed(4.0), props: HashMap::new(), background: None },
-            SubScene { template: Some("c".into()), video_source: None, source_volume: None, duration: SceneDuration::Auto, props: HashMap::new(), background: None },
+            SubScene { template: Some("a".into()), video_source: None, source_volume: None, duration: SceneDuration::Fixed(3.0), props: HashMap::new(), background: None, overlay: None },
+            SubScene { template: Some("b".into()), video_source: None, source_volume: None, duration: SceneDuration::Fixed(4.0), props: HashMap::new(), background: None, overlay: None },
+            SubScene { template: Some("c".into()), video_source: None, source_volume: None, duration: SceneDuration::Auto, props: HashMap::new(), background: None, overlay: None },
         ];
         // TTS = 13s, padding = 0.5+0.5 = 1s, total = 14s. Fixed = 7s. Auto = 7s.
         let durs = resolve_sub_scene_durations(&subs, Some(13.0), 0.5, 0.5, 5.0).unwrap();
@@ -868,8 +965,8 @@ Text."#;
     #[test]
     fn test_resolve_sub_scene_durations_no_auto() {
         let subs = vec![
-            SubScene { template: Some("a".into()), video_source: None, source_volume: None, duration: SceneDuration::Fixed(3.0), props: HashMap::new(), background: None },
-            SubScene { template: Some("b".into()), video_source: None, source_volume: None, duration: SceneDuration::Fixed(4.0), props: HashMap::new(), background: None },
+            SubScene { template: Some("a".into()), video_source: None, source_volume: None, duration: SceneDuration::Fixed(3.0), props: HashMap::new(), background: None, overlay: None },
+            SubScene { template: Some("b".into()), video_source: None, source_volume: None, duration: SceneDuration::Fixed(4.0), props: HashMap::new(), background: None, overlay: None },
         ];
         let durs = resolve_sub_scene_durations(&subs, Some(10.0), 0.5, 0.5, 5.0).unwrap();
         assert!((durs[0] - 3.0).abs() < 0.001);

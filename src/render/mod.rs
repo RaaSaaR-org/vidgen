@@ -1,6 +1,7 @@
 pub mod browser;
 pub mod encoder;
 pub mod frame_cache;
+pub mod overlay;
 pub mod sequence;
 
 use crate::config::{resolve_encoding, ProjectConfig, QualityPreset};
@@ -86,6 +87,7 @@ fn apply_format_overrides(scene: &Scene, fmt_name: &str) -> Scene {
                 video_source: scene.frontmatter.video_source.clone(),
                 source_volume: scene.frontmatter.source_volume,
                 sub_scenes: scene.frontmatter.sub_scenes.clone(),
+                overlay: scene.frontmatter.overlay.clone(),
                 props: scene.frontmatter.props.clone(),
                 background: scene.frontmatter.background.as_ref().map(|bg| {
                     crate::scene::BackgroundConfig {
@@ -133,6 +135,7 @@ fn apply_format_overrides(scene: &Scene, fmt_name: &str) -> Scene {
                     video_source: scene.frontmatter.video_source.clone(),
                     source_volume: scene.frontmatter.source_volume,
                     sub_scenes: scene.frontmatter.sub_scenes.clone(),
+                    overlay: scene.frontmatter.overlay.clone(),
                     props,
                     background,
                     transition_in: scene.frontmatter.transition_in.clone(),
@@ -657,6 +660,24 @@ pub async fn render_project(
                     &format!("Scene {} captured ({})", i + 1, fmt_name),
                 )
                 .await;
+        }
+
+        // Apply overlays to scenes that have them (needs browser for PNG rendering)
+        for (i, scene) in fmt_scenes.iter().enumerate() {
+            if let Some(ref ov) = scene.frontmatter.overlay {
+                let actual_dur = encoder::probe_video_duration(&scene_files[i]).unwrap_or(scene_durs[i]);
+                overlay::apply_overlay(
+                    &browser,
+                    &scene_files[i],
+                    ov,
+                    &config.theme,
+                    *width,
+                    *height,
+                    actual_dur,
+                    &platform,
+                )
+                .await?;
+            }
         }
 
         // Close browser for this format

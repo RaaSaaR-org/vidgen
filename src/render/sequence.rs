@@ -101,6 +101,7 @@ pub async fn render_sequence_scene(
                     video_source: None,
                     source_volume: None,
                     sub_scenes: None,
+                    overlay: None,
                     props: sub.props.clone(),
                     background: sub.background.clone(),
                     transition_in: None,
@@ -132,6 +133,22 @@ pub async fn render_sequence_scene(
                 0.0,
                 0.0,
                 Some(project_path),
+            )
+            .await?;
+        }
+
+        // Apply overlay if configured on this sub-scene
+        if let Some(ref ov) = sub.overlay {
+            let actual_dur = encoder::probe_video_duration(&sub_output).unwrap_or(dur);
+            super::overlay::apply_overlay(
+                browser,
+                &sub_output,
+                ov,
+                theme,
+                width,
+                height,
+                actual_dur,
+                platform,
             )
             .await?;
         }

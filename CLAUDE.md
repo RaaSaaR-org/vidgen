@@ -127,3 +127,9 @@ my-video/
 - Video clip scenes support `source_volume` for ducking original audio while voiceover plays
 - Sequence scenes allow a single voiceover to span multiple visual sub-scenes (HTML templates + video clips)
 - Overlays rendered as RGBA PNGs via Chromium (`omit_background: true`), composited via FFmpeg `overlay` filter with `loop` + `fade` alpha animations. Applied as post-process on per-scene MP4s (after render, before concat)
+
+## Known bugs
+
+See `BUGS.md` for detailed bug reports with reproduction steps.
+
+- **BUG-001 (High):** Concat truncates video when mixing HTML-rendered scenes with `video_source` clip scenes. The per-scene MP4s are individually correct, but the final concat output is silently truncated after the first clip scene. Root cause: likely DTS/PTS timestamp mismatch or timebase incompatibility between Chromium-rendered scenes and `prepare_video_clip()` output. Re-encoding during concat fixes it. Transitions on clip scenes make it worse.

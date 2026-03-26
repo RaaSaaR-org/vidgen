@@ -52,6 +52,19 @@ vidgen watch ./my-video
 
 # Add assets
 vidgen asset add ./photo.jpg -p ./my-video -c images
+
+# Export as PNG, GIF, audio, or subtitles
+vidgen export ./my-video image --scene 0 --progress 0.5
+vidgen export ./my-video gif --scene 0 --duration 3
+vidgen export ./my-video audio --scene 0
+vidgen export ./my-video subtitles
+
+# Project management
+vidgen info ./my-video                    # Show timing overview
+vidgen validate ./my-video                # Check for issues
+vidgen diff ./my-video                    # What changed since last render
+vidgen test ./my-video                    # Visual regression testing
+vidgen templates -p ./my-video            # Browse available templates
 ```
 
 ## Project structure
@@ -225,7 +238,7 @@ Custom templates go in `templates/components/` — the file stem becomes the tem
 
 ## MCP server
 
-vidgen exposes an MCP server (stdio transport) with 10 tools for AI agent integration:
+vidgen exposes an MCP server (stdio transport) with 13 tools for AI agent integration:
 
 ```bash
 vidgen mcp
@@ -243,6 +256,33 @@ vidgen mcp
 | `preview_scene` | Generate a still frame preview |
 | `render` | Start async video rendering |
 | `get_project_status` | Get project info and render status |
+| `export_media` | Export scene as PNG/GIF/WebP |
+| `batch` | Execute multiple operations in one call |
+| `get_render_progress` | Poll render status |
+
+## Export formats
+
+```bash
+vidgen export <project> image   # PNG at any progress point (--smart for best frame)
+vidgen export <project> gif     # Animated GIF (--combined for all scenes in one)
+vidgen export <project> webp    # Animated WebP/APNG
+vidgen export <project> mp4     # Single scene as standalone video
+vidgen export <project> audio   # Voiceover WAV files
+vidgen export <project> srt     # SRT subtitle file
+```
+
+## Quality & Testing
+
+- `vidgen validate` — checks config, templates, assets, fonts, WCAG contrast
+- `vidgen test --update` — creates reference snapshots
+- `vidgen test` — compares against references (visual regression)
+- `vidgen diff` — shows which scenes changed since last render
+
+## Performance
+
+- **Incremental rendering:** only re-renders changed scenes (use `--no-cache` to force full re-render)
+- **Hardware encoding:** `--gpu` auto-detects VideoToolbox/NVENC/VAAPI
+- **Parallel TTS:** cloud engines (ElevenLabs, Edge) synthesize concurrently
 
 ## TTS engines
 
@@ -253,6 +293,8 @@ vidgen mcp
 | Piper | Offline | Fast local neural TTS via ONNX models. See [piper](https://github.com/rhasspy/piper) |
 | ElevenLabs | Cloud | API key required (`ELEVEN_API_KEY`). Voice cloning support |
 
+Set `language` in `project.toml` or per-scene voice config for multilingual support. Audio is normalized via `loudnorm` filter, and silence is automatically trimmed for native TTS output.
+
 ## Output formats
 
 Supports multi-format rendering from a single project via CSS container queries:
@@ -261,7 +303,7 @@ Supports multi-format rendering from a single project via CSS container queries:
 - **Portrait** (1080x1920) — Instagram Reels, TikTok, YouTube Shorts
 - **Square** (1080x1080)
 
-Platform-specific encoding presets handle codec, bitrate, and file size constraints automatically.
+Platform presets: `youtube`, `youtube-short`, `instagram-reel`, `tiktok`, `linkedin`, `square`. Each preset handles codec, bitrate, and file size constraints automatically.
 
 ## Debugging
 
@@ -274,6 +316,12 @@ vidgen render ./my-video --debug
 
 # Custom debug output directory
 vidgen render ./my-video --debug --debug-dir /tmp/vidgen-debug
+
+# Additional render flags
+vidgen render ./my-video --speed 1.2      # Voice speed override
+vidgen render ./my-video --crop 9:16      # Auto-crop to aspect ratio
+vidgen render ./my-video --gpu            # Hardware-accelerated encoding
+vidgen render ./my-video --no-cache       # Disable incremental cache
 ```
 
 Debug mode saves each per-scene MP4 to `output/debug/` (named by scene filename), making it easy to identify which scene has issues.
@@ -291,6 +339,8 @@ fade_out = 3.0      # seconds
 ```
 
 Per-scene music overrides the project default via `audio.music` in scene frontmatter.
+
+Fades apply only to the music track — voice stays at full volume. Chapter markers are automatically embedded in the output MP4.
 
 ## Asset references
 

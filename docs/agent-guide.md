@@ -29,6 +29,9 @@ Start with `vidgen mcp` (stdio transport). Available tools:
 | `preview_scene` | Get a PNG preview of a scene |
 | `render` | Render the project to MP4 |
 | `get_project_status` | Check project info, scene count, render state |
+| `export_media` | Export scene as PNG/GIF/WebP (supports `progress` parameter) |
+| `batch` | Execute multiple operations in one call (reduces round-trips) |
+| `get_render_progress` | Poll render progress during long renders |
 
 **Batch workflow (2 calls for a complete video):**
 1. `create_project` with `scenes` array — creates project + all scenes at once
@@ -45,6 +48,11 @@ vidgen clip web --help
 # Create a project
 vidgen init ./my-video --preset short
 
+# Platform presets
+vidgen init ./my-video --preset youtube-short  # 1080x1920
+vidgen init ./my-video --preset tiktok         # 1080x1920
+vidgen init ./my-video --preset instagram-reel # 1080x1920
+
 # Render
 vidgen render ./my-video
 
@@ -53,6 +61,25 @@ echo "Your script here" | vidgen qr -o output.mp4
 
 # Debug a render (saves intermediate scene files)
 vidgen render ./my-video --debug
+
+# Export media (images, GIFs, audio, subtitles)
+vidgen export ./my-video image --scene 0 --progress 0.5
+vidgen export ./my-video gif --scene 0 --duration 3
+vidgen export ./my-video audio --scene 0
+vidgen export ./my-video subtitles
+
+# Project management
+vidgen info ./my-video          # Timing overview without rendering
+vidgen validate ./my-video      # Check for issues before render
+vidgen diff ./my-video          # What changed since last render
+vidgen test ./my-video          # Visual regression testing
+vidgen templates -p ./my-video  # Browse available templates
+
+# Render options
+vidgen render ./my-video --speed 1.2     # Faster voiceover
+vidgen render ./my-video --crop 9:16     # Auto-crop aspect ratio
+vidgen render ./my-video --gpu           # Hardware encoding
+vidgen render ./my-video --no-cache      # Force full re-render
 ```
 
 ## Scene types reference
@@ -233,6 +260,8 @@ platform = "instagram-reels"
 engine = "edge"                      # native, edge, piper, elevenlabs
 default_voice = "en-US-JennyNeural"
 speed = 1.0
+language = "de"                      # Language hint for multilingual TTS
+normalize = true                     # Audio normalization (loudnorm)
 padding_before = 0.5                 # silence before voiceover
 padding_after = 0.5                  # silence after voiceover
 
@@ -254,6 +283,82 @@ fade_in = 2.0
 fade_out = 3.0
 ```
 
+## Export & Media Generation
+
+vidgen can export individual scenes as images, GIFs, audio, or subtitles — useful for thumbnails, social previews, and asset extraction.
+
+### MCP tools
+
+- **`export_media`** — Export a scene as PNG, GIF, or WebP. Use the `progress` parameter (0.0–1.0) to capture a specific moment in the scene. Example: `progress: 0.5` captures mid-scene, useful for previewing animations or finding the best thumbnail frame.
+- **`batch`** — Execute multiple operations in a single MCP call. Reduces round-trips when you need to export several scenes or combine exports with config changes. Each operation in the batch runs sequentially and returns individual results.
+
+### CLI export commands
+
+```bash
+# Static image at a specific progress point
+vidgen export ./my-video image --scene 0 --progress 0.5
+
+# Animated GIF (palette-optimized, two-pass)
+vidgen export ./my-video gif --scene 0 --duration 3
+
+# Extract scene audio (TTS voiceover)
+vidgen export ./my-video audio --scene 0
+
+# Generate subtitle file for the entire project
+vidgen export ./my-video subtitles
+```
+
+**Use cases for agents:**
+- Generate thumbnail candidates by exporting at `progress: 0.0`, `0.5`, and `1.0`
+- Create social media preview GIFs from key scenes
+- Extract audio for transcription or review
+- Use `batch` to export multiple formats in one call
+
+## Quality Assurance
+
+vidgen includes built-in tools for validating projects and catching issues before rendering.
+
+### Validate
+
+```bash
+vidgen validate ./my-video
+```
+
+Checks for common issues:
+- Config errors (invalid fps, dimensions, speed values)
+- Missing or unknown templates
+- Missing asset files (images, clips, fonts)
+- WCAG contrast ratio warnings for text/background combinations
+- Duration warnings for unusually short or long scenes
+
+### Visual regression testing
+
+```bash
+# Create baseline snapshots (renders each scene at 3 progress points)
+vidgen test ./my-video --update
+
+# Compare against baselines (pixel-diff)
+vidgen test ./my-video
+```
+
+Snapshots are stored in `.vidgen/snapshots/`. Run `--update` after intentional visual changes.
+
+### Diff
+
+```bash
+vidgen diff ./my-video
+```
+
+Shows which scenes have changed since the last render by comparing TTS cache keys. Useful to understand what will be re-rendered.
+
+### Quality report
+
+After rendering, vidgen outputs a quality report including:
+- Output bitrate and codec details
+- Peak audio levels
+- Final file size
+- Per-scene render times
+
 ## Best practices for agents
 
 ### Duration
@@ -267,6 +372,13 @@ fade_out = 3.0
 - Keep voiceover scripts concise — 1-2 sentences per scene for short videos
 - Use sequence scenes when you need visual variety under a longer narration
 - Duck source audio (`source_volume: 0.1-0.3`) on video clips with voiceover
+
+### Efficiency
+
+- Use `batch` tool to reduce MCP round-trips when performing multiple operations
+- Use `export_media` with `progress: 0.5` for mid-scene previews before committing to a full render
+- Use `info` via MCP (`get_project_status`) to check timing before rendering
+- Incremental rendering caches unchanged scenes — second renders are 10x faster
 
 ### Debugging
 

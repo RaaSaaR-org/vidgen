@@ -74,6 +74,9 @@ async fn run(cli: Cli) -> VidgenResult<()> {
                 } => commands::asset::add(&source, &project, &category),
             }
         }
+        Command::Templates { project, output } => {
+            commands::templates::run(project.as_deref(), output.as_deref()).await
+        }
         Command::Mcp => commands::mcp::run().await,
         Command::Render {
             path,
@@ -85,8 +88,12 @@ async fn run(cli: Cli) -> VidgenResult<()> {
             burn_in,
             parallel,
             force_tts,
+            no_cache,
+            gpu,
+            speed,
+            crop,
         } => {
-            commands::render::run(&path, fps, quality, formats, scenes, subtitles, burn_in, parallel, force_tts)
+            commands::render::run(&path, fps, quality, formats, scenes, subtitles, burn_in, parallel, force_tts, no_cache, gpu, speed, crop.as_deref())
                 .await
         }
         Command::Preview {
@@ -138,5 +145,60 @@ async fn run(cli: Cli) -> VidgenResult<()> {
             )
             .await
         }
+        Command::Export { path, format } => {
+            use cli::ExportAction;
+            use commands::export::ExportFormat;
+            match format {
+                ExportAction::Image { scene, frame, progress, output, all, smart, open } => {
+                    commands::export::run(
+                        &path, ExportFormat::Png, scene, frame, progress, None, output, all, None, false, smart, open,
+                    ).await
+                }
+                ExportAction::Gif { scene, duration, output, all, width, combined, open } => {
+                    commands::export::run(
+                        &path, ExportFormat::Gif, scene, 0, None, Some(duration), output, all, width, combined, false, open,
+                    ).await
+                }
+                ExportAction::Webp { scene, duration, output, all, width, open } => {
+                    commands::export::run(
+                        &path, ExportFormat::Webp, scene, 0, None, Some(duration), output, all, width, false, false, open,
+                    ).await
+                }
+                ExportAction::Mp4 { scene, output, force_tts } => {
+                    let idx = scene.unwrap_or(0);
+                    commands::render::run(
+                        &path, None, None, None, Some(vec![idx]), false, false, None, force_tts, false, false, None, None,
+                    ).await?;
+                    if let Some(output_path) = output {
+                        let cfg = config::load_config(&path)?;
+                        let output_rel = cfg.output.directory.strip_prefix("./").unwrap_or(&cfg.output.directory);
+                        let output_dir = path.join(output_rel);
+                        let project_slug = cfg.project.name
+                            .to_lowercase()
+                            .replace(|c: char| !c.is_alphanumeric(), "-")
+                            .trim_matches('-')
+                            .to_string();
+                        let rendered = output_dir.join(format!("{project_slug}.mp4"));
+                        if rendered.exists() {
+                            if let Some(parent) = output_path.parent() {
+                                std::fs::create_dir_all(parent)?;
+                            }
+                            std::fs::rename(&rendered, &output_path)?;
+                        }
+                    }
+                    Ok(())
+                }
+                ExportAction::Audio { scene, output } => {
+                    commands::export::run_audio(&path, scene, output).await
+                }
+                ExportAction::Subtitles { output } => {
+                    commands::export::run_subtitles(&path, output).await
+                }
+            }
+        }
+        Command::Info { path } => commands::info::run(&path).await,
+        Command::Validate { path } => commands::validate::run(&path),
+        Command::Diff { path } => commands::diff::run(&path).await,
+        Command::Test { path, update } => commands::test::run(&path, update).await,
     }
 }

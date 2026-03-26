@@ -135,6 +135,22 @@ pub enum Command {
         /// Force TTS regeneration, ignoring cached audio files
         #[arg(long)]
         force_tts: bool,
+
+        /// Disable incremental rendering cache (force full re-render of all scenes)
+        #[arg(long)]
+        no_cache: bool,
+
+        /// Use GPU hardware-accelerated encoding (auto-detects VideoToolbox, NVENC, VAAPI)
+        #[arg(long)]
+        gpu: bool,
+
+        /// Voice speed override (1.0 = normal, overrides project.toml)
+        #[arg(long)]
+        speed: Option<f32>,
+
+        /// Post-process crop to aspect ratio (e.g., "9:16", "1:1")
+        #[arg(long)]
+        crop: Option<String>,
     },
 
     /// Preview a single frame of a scene as a PNG image
@@ -218,6 +234,52 @@ pub enum Command {
         props: Option<String>,
     },
 
+    /// List and preview available templates
+    Templates {
+        /// Project path (optional — shows project templates in addition to built-ins)
+        #[arg(long, short = 'p')]
+        project: Option<PathBuf>,
+
+        /// Output directory for thumbnail previews
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
+    },
+
+    /// Export scenes as images (PNG), animated GIFs, WebP, MP4, audio, or subtitles
+    Export {
+        /// Path to the project directory
+        path: PathBuf,
+        #[command(subcommand)]
+        format: ExportAction,
+    },
+
+    /// Show project info, scene list, and estimated timing (runs TTS but no rendering)
+    Info {
+        /// Path to the project directory
+        path: PathBuf,
+    },
+
+    /// Validate project for common issues (missing templates, fonts, assets, timing, contrast)
+    Validate {
+        /// Path to the project directory
+        path: PathBuf,
+    },
+
+    /// Show what changed since last render (text changes, duration differences)
+    Diff {
+        /// Path to the project directory
+        path: PathBuf,
+    },
+
+    /// Run visual regression tests against stored snapshots
+    Test {
+        /// Path to the project directory
+        path: PathBuf,
+        /// Update reference snapshots instead of comparing
+        #[arg(long)]
+        update: bool,
+    },
+
     /// Start an MCP server over stdio for AI agent integration
     #[command(long_about = "Start a Model Context Protocol (MCP) server on stdin/stdout.\n\
         AI agents (like Claude) connect via this transport to create and render videos\n\
@@ -236,6 +298,82 @@ pub enum Command {
     Clip {
         #[command(subcommand)]
         action: ClipAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ExportAction {
+    /// Export as PNG image (single frame)
+    #[command(alias = "png")]
+    Image {
+        #[arg(long, short = 's')]
+        scene: Option<usize>,
+        #[arg(long, short = 'f', default_value_t = 0)]
+        frame: u32,
+        #[arg(long, short = 'p')]
+        progress: Option<f32>,
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        all: bool,
+        #[arg(long)]
+        smart: bool,
+        #[arg(long)]
+        open: bool,
+    },
+    /// Export as animated GIF (looping)
+    Gif {
+        #[arg(long, short = 's')]
+        scene: Option<usize>,
+        #[arg(long, short = 'd', default_value_t = 3.0)]
+        duration: f32,
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        all: bool,
+        #[arg(long, short = 'w')]
+        width: Option<u32>,
+        #[arg(long)]
+        combined: bool,
+        #[arg(long)]
+        open: bool,
+    },
+    /// Export as animated WebP
+    Webp {
+        #[arg(long, short = 's')]
+        scene: Option<usize>,
+        #[arg(long, short = 'd', default_value_t = 3.0)]
+        duration: f32,
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        all: bool,
+        #[arg(long, short = 'w')]
+        width: Option<u32>,
+        #[arg(long)]
+        open: bool,
+    },
+    /// Export a single scene as standalone MP4
+    Mp4 {
+        #[arg(long, short = 's')]
+        scene: Option<usize>,
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        force_tts: bool,
+    },
+    /// Export voiceover audio only (WAV)
+    Audio {
+        #[arg(long, short = 's')]
+        scene: Option<usize>,
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
+    },
+    /// Export subtitles as SRT file
+    #[command(alias = "srt")]
+    Subtitles {
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
     },
 }
 

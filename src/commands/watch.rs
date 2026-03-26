@@ -93,7 +93,7 @@ pub async fn run(
 
                 if full_render {
                     // Full render mode
-                    match crate::commands::render::run(&project_path, None, None, None, None, false, false, None, false)
+                    match crate::commands::render::run(&project_path, None, None, None, None, false, false, None, false, false, false, None, None)
                         .await
                     {
                         Ok(()) => {}

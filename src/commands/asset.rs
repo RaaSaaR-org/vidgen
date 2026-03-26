@@ -31,7 +31,7 @@ pub fn add(source: &str, project_path: &Path, category: &AssetCategory) -> Vidge
             .next()
             .unwrap_or(source)
             .split('/')
-            .last()
+            .next_back()
             .unwrap_or("download.bin");
         let target = target_dir.join(filename);
 

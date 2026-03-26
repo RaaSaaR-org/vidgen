@@ -125,7 +125,7 @@ async fn capture_web(
 
     let mut encoder = SceneEncoder::new(
         &output_path, fps, width, height, &platform,
-        None, None, 0.0, 0.0, None,
+        None, None, 0.0, 0.0, None, false,
     )?;
 
     eprintln!(

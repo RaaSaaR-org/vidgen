@@ -193,6 +193,7 @@ pub async fn capture_scene_frames(
     audio_delay_secs: f64,
     content_padding_after: f64,
     project_path: Option<&Path>,
+    use_gpu: bool,
 ) -> VidgenResult<std::path::PathBuf> {
     let total_frames = Scene::total_frames_for_duration(effective_duration, fps);
     debug!(
@@ -245,7 +246,7 @@ pub async fn capture_scene_frames(
         let mut encoder = SceneEncoder::new(
             output_path, fps, width, height, platform,
             audio_path, music_path, music_volume, audio_delay_secs,
-            Some(effective_duration),
+            Some(effective_duration), use_gpu,
         )?;
         for _ in 0..total_frames {
             encoder.write_frame(&screenshot)?;
@@ -269,6 +270,7 @@ pub async fn capture_scene_frames(
         music_volume,
         audio_delay_secs,
         Some(effective_duration),
+        use_gpu,
     )?;
 
     // Compute content-progress boundaries (voice window within full scene duration)

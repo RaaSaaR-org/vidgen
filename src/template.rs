@@ -146,6 +146,18 @@ impl<'a> TemplateRegistry<'a> {
         Ok(Self { hbs })
     }
 
+    /// Return sorted list of all registered template names.
+    pub fn template_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.hbs.get_templates().keys().cloned().collect();
+        names.sort();
+        names
+    }
+
+    /// Check if a template is registered by name.
+    pub fn has_template(&self, name: &str) -> bool {
+        self.hbs.has_template(name)
+    }
+
     /// Register project-local templates from `<project_path>/templates/components/*.html`.
     /// Project templates can override built-in templates.
     pub fn register_project_templates(&mut self, project_path: &Path) -> VidgenResult<()> {

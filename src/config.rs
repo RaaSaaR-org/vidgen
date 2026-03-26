@@ -112,6 +112,10 @@ pub struct VoiceConfig {
     pub padding_after: f64,
     #[serde(default = "default_auto_fallback")]
     pub auto_fallback_duration: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(default = "default_true")]
+    pub normalize: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -201,6 +205,9 @@ fn default_output_dir() -> String {
 fn default_quality() -> String {
     "standard".into()
 }
+fn default_true() -> bool {
+    true
+}
 
 impl Default for VideoConfig {
     fn default() -> Self {
@@ -238,6 +245,8 @@ impl Default for VoiceConfig {
             padding_before: default_padding_before(),
             padding_after: default_padding_after(),
             auto_fallback_duration: default_auto_fallback(),
+            language: None,
+            normalize: true,
         }
     }
 }

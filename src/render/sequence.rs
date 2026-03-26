@@ -133,6 +133,7 @@ pub async fn render_sequence_scene(
                 0.0,
                 0.0,
                 Some(project_path),
+                false, // no GPU for sub-scenes
             )
             .await?;
         }

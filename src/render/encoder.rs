@@ -97,6 +97,26 @@ pub fn resolve_transition(
     })
 }
 
+/// Detect available hardware video encoders by querying FFmpeg.
+/// Returns the best available H.264 hardware encoder, or None if only software is available.
+pub fn detect_hw_encoder() -> Option<&'static str> {
+    let output = Command::new("ffmpeg")
+        .args(["-hide_banner", "-encoders"])
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    if stdout.contains("h264_videotoolbox") {
+        Some("h264_videotoolbox")
+    } else if stdout.contains("h264_nvenc") {
+        Some("h264_nvenc")
+    } else if stdout.contains("h264_vaapi") {
+        Some("h264_vaapi")
+    } else {
+        None
+    }
+}
+
 /// Encodes PNG frames piped to stdin into an MP4 file.
 pub struct SceneEncoder {
     child: Child,
@@ -121,6 +141,7 @@ impl SceneEncoder {
         music_volume: f64,
         audio_delay_secs: f64,
         effective_duration: Option<f64>,
+        use_gpu: bool,
     ) -> VidgenResult<Self> {
         let mut cmd = Command::new("ffmpeg");
         cmd.args([
@@ -148,18 +169,34 @@ impl SceneEncoder {
             cmd.args(["-i"]).arg(music.as_os_str());
         }
 
-        cmd.args([
-            "-c:v",
-            "libx264", // H.264 codec
-            "-pix_fmt",
-            "yuv420p", // Pixel format for compatibility
-            "-crf",
-            &platform.crf.to_string(), // Quality
-            "-preset",
-            platform.preset, // Speed/quality tradeoff
-            "-movflags",
-            "+faststart", // Web-optimized
-        ]);
+        // Select video codec: hardware-accelerated if --gpu and available, otherwise libx264
+        let hw_encoder = if use_gpu { detect_hw_encoder() } else { None };
+        if let Some(hw_codec) = hw_encoder {
+            debug!("Using hardware encoder: {}", hw_codec);
+            cmd.args([
+                "-c:v",
+                hw_codec,
+                "-pix_fmt",
+                "yuv420p",
+                "-b:v",
+                "5M", // HW encoders don't all support CRF, use bitrate instead
+                "-movflags",
+                "+faststart",
+            ]);
+        } else {
+            cmd.args([
+                "-c:v",
+                "libx264", // H.264 codec
+                "-pix_fmt",
+                "yuv420p", // Pixel format for compatibility
+                "-crf",
+                &platform.crf.to_string(), // Quality
+                "-preset",
+                platform.preset, // Speed/quality tradeoff
+                "-movflags",
+                "+faststart", // Web-optimized
+            ]);
+        }
 
         // Audio mixing: voice + music, only voice, only music, or none
         // When audio_delay_secs > 0, insert an adelay filter to shift the voice track
@@ -167,10 +204,11 @@ impl SceneEncoder {
         match (has_voice, has_music) {
             (true, true) => {
                 // Voice is input 1, music is input 2
+                // apad pads voice with silence to fill the full scene duration
                 let voice_chain = if delay_ms > 0 {
-                    format!("[1:a]adelay={delay_ms}|{delay_ms},volume=1.0[voice]")
+                    format!("[1:a]adelay={delay_ms}|{delay_ms},volume=1.0,apad[voice]")
                 } else {
-                    "[1:a]volume=1.0[voice]".to_string()
+                    "[1:a]volume=1.0,apad[voice]".to_string()
                 };
                 let filter = format!(
                     "{voice_chain};[2:a]volume={music_volume:.2}[music];\
@@ -184,8 +222,11 @@ impl SceneEncoder {
                 ]);
             }
             (true, false) => {
+                // apad pads voice with silence to fill the full scene duration
                 if delay_ms > 0 {
-                    cmd.args(["-af", &format!("adelay={delay_ms}|{delay_ms}")]);
+                    cmd.args(["-af", &format!("adelay={delay_ms}|{delay_ms},apad")]);
+                } else {
+                    cmd.args(["-af", "apad"]);
                 }
                 cmd.args([
                     "-c:a", "aac", "-ac", "2",
@@ -218,8 +259,8 @@ impl SceneEncoder {
         cmd.stderr(Stdio::piped());
 
         debug!(
-            "Spawning FFmpeg encoder: {}x{} @ {}fps, crf={}",
-            width, height, fps, platform.crf
+            "Spawning FFmpeg encoder: {}x{} @ {}fps, codec={}, crf={}",
+            width, height, fps, hw_encoder.unwrap_or("libx264"), platform.crf
         );
 
         let mut child = cmd
@@ -936,6 +977,58 @@ pub fn apply_audio_fades(
         )));
     }
 
+    Ok(())
+}
+
+/// Crop a video to a target aspect ratio (e.g., "9:16") using FFmpeg.
+pub fn apply_crop(video_path: &Path, aspect: &str) -> VidgenResult<()> {
+    let parts: Vec<u32> = aspect.split(':').filter_map(|s| s.parse().ok()).collect();
+    if parts.len() != 2 || parts[0] == 0 || parts[1] == 0 {
+        return Err(VidgenError::Other(format!("Invalid aspect ratio: {aspect}")));
+    }
+
+    // Probe source dimensions
+    let probe = Command::new("ffprobe")
+        .args(["-v", "quiet", "-select_streams", "v:0",
+               "-show_entries", "stream=width,height", "-of", "csv=p=0"])
+        .arg(video_path)
+        .output()
+        .map_err(|e| VidgenError::Ffmpeg(format!("ffprobe failed: {e}")))?;
+    let dims: Vec<u32> = String::from_utf8_lossy(&probe.stdout)
+        .trim().split(',').filter_map(|s| s.parse().ok()).collect();
+    if dims.len() != 2 {
+        return Err(VidgenError::Ffmpeg("Could not probe video dimensions".into()));
+    }
+    let (src_w, src_h) = (dims[0], dims[1]);
+
+    let target_ratio = parts[0] as f64 / parts[1] as f64;
+    let source_ratio = src_w as f64 / src_h as f64;
+    let (crop_w, crop_h) = if target_ratio < source_ratio {
+        let h = src_h;
+        let w = ((h as f64 * target_ratio) as u32) & !1; // even
+        (w, h)
+    } else {
+        let w = src_w;
+        let h = ((w as f64 / target_ratio) as u32) & !1; // even
+        (w, h)
+    };
+    let x = (src_w - crop_w) / 2;
+    let y = (src_h - crop_h) / 2;
+
+    let tmp = video_path.with_extension("crop-tmp.mp4");
+    std::fs::rename(video_path, &tmp)?;
+    let status = Command::new("ffmpeg")
+        .args(["-y", "-i"])
+        .arg(&tmp)
+        .args(["-vf", &format!("crop={crop_w}:{crop_h}:{x}:{y}"), "-c:a", "copy"])
+        .arg(video_path)
+        .stdout(Stdio::null()).stderr(Stdio::null())
+        .status()
+        .map_err(|e| VidgenError::Ffmpeg(format!("crop failed: {e}")))?;
+    let _ = std::fs::remove_file(&tmp);
+    if !status.success() {
+        return Err(VidgenError::Ffmpeg("FFmpeg crop failed".into()));
+    }
     Ok(())
 }
 

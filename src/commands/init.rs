@@ -506,8 +506,81 @@ fn apply_preset(preset: &str, path: &Path) -> VidgenResult<CreateProjectOptions>
                 },
             ]),
         }),
+        // Platform presets — resolution-only, no predefined scenes or theme
+        "youtube" => Ok(CreateProjectOptions {
+            path: path.to_path_buf(),
+            name: None,
+            fps: Some(30),
+            width: Some(1920),
+            height: Some(1080),
+            quality: None,
+            voice: None,
+            formats: None,
+            theme: None,
+            scenes: None,
+        }),
+        "youtube-short" => Ok(CreateProjectOptions {
+            path: path.to_path_buf(),
+            name: None,
+            fps: Some(30),
+            width: Some(1080),
+            height: Some(1920),
+            quality: None,
+            voice: None,
+            formats: None,
+            theme: None,
+            scenes: None,
+        }),
+        "instagram-reel" => Ok(CreateProjectOptions {
+            path: path.to_path_buf(),
+            name: None,
+            fps: Some(30),
+            width: Some(1080),
+            height: Some(1920),
+            quality: None,
+            voice: None,
+            formats: None,
+            theme: None,
+            scenes: None,
+        }),
+        "tiktok" => Ok(CreateProjectOptions {
+            path: path.to_path_buf(),
+            name: None,
+            fps: Some(30),
+            width: Some(1080),
+            height: Some(1920),
+            quality: None,
+            voice: None,
+            formats: None,
+            theme: None,
+            scenes: None,
+        }),
+        "linkedin" => Ok(CreateProjectOptions {
+            path: path.to_path_buf(),
+            name: None,
+            fps: Some(30),
+            width: Some(1920),
+            height: Some(1080),
+            quality: None,
+            voice: None,
+            formats: None,
+            theme: None,
+            scenes: None,
+        }),
+        "square" => Ok(CreateProjectOptions {
+            path: path.to_path_buf(),
+            name: None,
+            fps: Some(30),
+            width: Some(1080),
+            height: Some(1080),
+            quality: None,
+            voice: None,
+            formats: None,
+            theme: None,
+            scenes: None,
+        }),
         other => Err(VidgenError::Other(format!(
-            "Unknown preset \"{other}\". Available presets: short, recap, educational"
+            "Unknown preset \"{other}\". Available presets: short, recap, educational, youtube, youtube-short, instagram-reel, tiktok, linkedin, square"
         ))),
     }
 }
@@ -899,5 +972,73 @@ mod tests {
         let opts = apply_preset("short-9x16", &project_path).unwrap();
         assert_eq!(opts.width, Some(1080));
         assert_eq!(opts.height, Some(1920));
+    }
+
+    #[test]
+    fn test_preset_youtube() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_path = dir.path().join("youtube-project");
+        let opts = apply_preset("youtube", &project_path).unwrap();
+        let result = create_project(&opts).unwrap();
+        assert_eq!(result.scenes_created, 1); // default scene only
+
+        let config = crate::config::load_config(&project_path).unwrap();
+        assert_eq!(config.video.width, 1920);
+        assert_eq!(config.video.height, 1080);
+        assert_eq!(config.video.fps, 30);
+    }
+
+    #[test]
+    fn test_preset_youtube_short() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_path = dir.path().join("yt-short-project");
+        let opts = apply_preset("youtube-short", &project_path).unwrap();
+        let result = create_project(&opts).unwrap();
+
+        let config = crate::config::load_config(&project_path).unwrap();
+        assert_eq!(config.video.width, 1080);
+        assert_eq!(config.video.height, 1920);
+        assert_eq!(result.scenes_created, 1);
+    }
+
+    #[test]
+    fn test_preset_instagram_reel() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_path = dir.path().join("ig-reel-project");
+        let opts = apply_preset("instagram-reel", &project_path).unwrap();
+        assert_eq!(opts.width, Some(1080));
+        assert_eq!(opts.height, Some(1920));
+        assert_eq!(opts.fps, Some(30));
+    }
+
+    #[test]
+    fn test_preset_tiktok() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_path = dir.path().join("tiktok-project");
+        let opts = apply_preset("tiktok", &project_path).unwrap();
+        assert_eq!(opts.width, Some(1080));
+        assert_eq!(opts.height, Some(1920));
+    }
+
+    #[test]
+    fn test_preset_linkedin() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_path = dir.path().join("linkedin-project");
+        let opts = apply_preset("linkedin", &project_path).unwrap();
+        assert_eq!(opts.width, Some(1920));
+        assert_eq!(opts.height, Some(1080));
+    }
+
+    #[test]
+    fn test_preset_square() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_path = dir.path().join("square-project");
+        let opts = apply_preset("square", &project_path).unwrap();
+        let result = create_project(&opts).unwrap();
+
+        let config = crate::config::load_config(&project_path).unwrap();
+        assert_eq!(config.video.width, 1080);
+        assert_eq!(config.video.height, 1080);
+        assert_eq!(result.scenes_created, 1);
     }
 }

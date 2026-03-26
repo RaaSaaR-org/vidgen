@@ -100,6 +100,9 @@ pub async fn run(
         None,
         None,
         false,
+        true,  // no_cache for quickrender (ephemeral project)
+        false, // no GPU by default
+        None,  // no speed override
     )
     .await?;
 

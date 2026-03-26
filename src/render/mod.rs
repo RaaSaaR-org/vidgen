@@ -4,7 +4,7 @@ pub mod frame_cache;
 pub mod overlay;
 pub mod sequence;
 
-use crate::config::{resolve_encoding, ProjectConfig, QualityPreset};
+use crate::config::{resolve_encoding, ProjectConfig, QualityPreset, ThemeConfig, VoiceConfig};
 use crate::error::VidgenResult;
 use crate::render::encoder::{resolve_transition, SceneTransition};
 use crate::scene::{Scene, SceneFrontmatter};
@@ -13,6 +13,7 @@ use crate::template::TemplateRegistry;
 use crate::tts;
 use colored::*;
 use futures::stream::{self, StreamExt};
+use sha2::{Digest, Sha256};
 use tracing::debug;
 use rmcp::model::ProgressNotificationParam;
 use rmcp::{Peer, RoleServer};
@@ -152,6 +153,95 @@ fn apply_format_overrides(scene: &Scene, fmt_name: &str) -> Scene {
     }
 }
 
+/// Compute a SHA256 content hash for a scene that captures everything affecting its rendered output.
+/// Used for incremental rendering: if the hash matches a cached scene MP4, we can skip re-rendering.
+fn scene_content_hash(
+    scene: &Scene,
+    width: u32,
+    height: u32,
+    fps: u32,
+    theme: &ThemeConfig,
+    voice_config: &VoiceConfig,
+    effective_duration: f64,
+    fmt_name: &str,
+) -> String {
+    let mut hasher = Sha256::new();
+
+    // Template + props
+    hasher.update(scene.frontmatter.template.as_bytes());
+    hasher.update(format!("{:?}", scene.frontmatter.props).as_bytes());
+
+    // Voiceover script
+    hasher.update(scene.script.as_bytes());
+
+    // Duration config
+    hasher.update(format!("{:?}", scene.frontmatter.duration).as_bytes());
+    hasher.update(format!("{:.6}", effective_duration).as_bytes());
+
+    // Voice config (engine, voice, speed)
+    hasher.update(voice_config.engine.as_bytes());
+    if let Some(ref v) = voice_config.default_voice {
+        hasher.update(v.as_bytes());
+    }
+    hasher.update(format!("{:.4}", voice_config.speed).as_bytes());
+    if let Some(ref sv) = scene.frontmatter.voice {
+        hasher.update(format!("{:?}", sv).as_bytes());
+    }
+
+    // Theme colors
+    hasher.update(theme.primary.as_bytes());
+    hasher.update(theme.secondary.as_bytes());
+    hasher.update(theme.background.as_bytes());
+    hasher.update(theme.text.as_bytes());
+    hasher.update(theme.font_heading.as_bytes());
+
+    // Video dimensions and format
+    hasher.update(format!("{}x{}@{}", width, height, fps).as_bytes());
+    hasher.update(fmt_name.as_bytes());
+
+    // Background config
+    if let Some(ref bg) = scene.frontmatter.background {
+        hasher.update(format!("{:?}", bg).as_bytes());
+    }
+
+    // Video source (for clip scenes)
+    if let Some(ref vs) = scene.frontmatter.video_source {
+        hasher.update(vs.as_bytes());
+    }
+    if let Some(sv) = scene.frontmatter.source_volume {
+        hasher.update(format!("{:.4}", sv).as_bytes());
+    }
+
+    // Sub-scenes (for sequence scenes)
+    if let Some(ref subs) = scene.frontmatter.sub_scenes {
+        hasher.update(format!("{:?}", subs).as_bytes());
+    }
+
+    // Transitions
+    if let Some(ref t) = scene.frontmatter.transition_in {
+        hasher.update(t.as_bytes());
+    }
+    if let Some(ref t) = scene.frontmatter.transition_out {
+        hasher.update(t.as_bytes());
+    }
+    if let Some(td) = scene.frontmatter.transition_duration {
+        hasher.update(format!("{:.4}", td).as_bytes());
+    }
+
+    // Audio config
+    if let Some(ref a) = scene.frontmatter.audio {
+        hasher.update(format!("{:?}", a).as_bytes());
+    }
+
+    // Overlay
+    if let Some(ref ov) = scene.frontmatter.overlay {
+        hasher.update(format!("{:?}", ov).as_bytes());
+    }
+
+    let result = hasher.finalize();
+    format!("{:x}", result)[..16].to_string()
+}
+
 /// Resolve format list from config. Returns `(name, width, height, platform)` tuples.
 fn resolve_formats(
     config: &ProjectConfig,
@@ -189,6 +279,8 @@ pub async fn render_project(
     progress: RenderProgress,
     format_filter: Option<&[String]>,
     force_tts: bool,
+    no_cache: bool,
+    use_gpu: bool,
 ) -> VidgenResult<Vec<FormatOutput>> {
     let quality = QualityPreset::from_name(quality_name);
     let mut registry = TemplateRegistry::new()?;
@@ -206,10 +298,39 @@ pub async fn render_project(
         quality_name,
     );
 
+    // Print GPU encoder status
+    if use_gpu {
+        match encoder::detect_hw_encoder() {
+            Some(enc) => eprintln!(
+                "{} GPU encoding enabled: {}",
+                "render:".cyan().bold(),
+                enc,
+            ),
+            None => eprintln!(
+                "{} GPU requested but no hardware encoder found, using libx264",
+                "render:".cyan().bold(),
+            ),
+        }
+    }
+
+    // Print cache status
+    if !no_cache {
+        eprintln!(
+            "{} Incremental rendering enabled (use --no-cache to disable)",
+            "render:".cyan().bold(),
+        );
+    }
+
     let render_start = Instant::now();
 
     // Create output directory
     std::fs::create_dir_all(output_dir)?;
+
+    // Create cache directory for incremental rendering
+    let cache_dir = project_path.join("output").join(".cache");
+    if !no_cache {
+        std::fs::create_dir_all(&cache_dir)?;
+    }
 
     // Create a temp directory for intermediate scene files
     let temp_dir = tempfile::tempdir()?;
@@ -541,8 +662,58 @@ pub async fn render_project(
         let tts_durations_ref = &tts_durations;
         let voice_config_ref = &config.voice;
         let project_path_ref = project_path;
+        let cache_dir_ref = &cache_dir;
 
-        // Render scenes concurrently with bounded parallelism
+        // Compute scene content hashes for incremental rendering
+        let scene_hashes: Vec<String> = fmt_scenes
+            .iter()
+            .enumerate()
+            .map(|(i, scene)| {
+                scene_content_hash(
+                    scene,
+                    *width,
+                    *height,
+                    fps,
+                    &config.theme,
+                    &config.voice,
+                    effective_durations[i],
+                    fmt_name,
+                )
+            })
+            .collect();
+        let scene_hashes_ref = &scene_hashes;
+
+        // Check cache hits before rendering
+        let cache_paths: Vec<Option<PathBuf>> = if no_cache {
+            vec![None; scenes.len()]
+        } else {
+            scene_hashes
+                .iter()
+                .enumerate()
+                .map(|(i, hash)| {
+                    let cached = cache_dir_ref.join(format!("{fmt_name}-scene-{i}-{hash}.mp4"));
+                    if cached.exists() {
+                        Some(cached)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+        let cache_paths_ref = &cache_paths;
+
+        let cached_count = cache_paths.iter().filter(|c| c.is_some()).count();
+        if cached_count > 0 {
+            eprintln!(
+                "{} {} of {} scenes cached, {} to render",
+                "cache:".green().bold(),
+                cached_count,
+                scenes.len(),
+                scenes.len() - cached_count,
+            );
+        }
+
+        // Render scenes concurrently with bounded parallelism (skipping cached ones)
         let scene_results: Vec<_> = stream::iter(0..scenes.len())
             .map(|i| async move {
                 let scene_start = Instant::now();
@@ -552,6 +723,16 @@ pub async fn render_project(
                 let music = &prep_ref[i].2;
                 let music_volume = prep_ref[i].3;
                 let dur = durations_ref[i];
+
+                // Check if this scene is cached
+                if let Some(ref cached_path) = cache_paths_ref[i] {
+                    // Copy cached scene to expected output location
+                    std::fs::copy(cached_path, scene_output).map_err(|e| {
+                        crate::error::VidgenError::Other(format!("Failed to copy cached scene: {e}"))
+                    })?;
+                    let render_secs = scene_start.elapsed().as_secs_f64();
+                    return Ok::<_, crate::error::VidgenError>((i, scene_output.clone(), dur, render_secs, true));
+                }
 
                 let path = if scene.is_sequence() {
                     // Sequence scene: render sub-scenes, concatenate, mix audio
@@ -631,11 +812,19 @@ pub async fn render_project(
                         audio_delays_ref[i],
                         content_paddings_ref[i],
                         Some(project_path_ref),
+                        use_gpu,
                     )
                     .await?
                 };
+
+                // Save to cache for future incremental renders
+                if !no_cache {
+                    let cache_path = cache_dir_ref.join(format!("{fmt_name}-scene-{i}-{}.mp4", scene_hashes_ref[i]));
+                    let _ = std::fs::copy(&path, &cache_path);
+                }
+
                 let render_secs = scene_start.elapsed().as_secs_f64();
-                Ok::<_, crate::error::VidgenError>((i, path, dur, render_secs))
+                Ok::<_, crate::error::VidgenError>((i, path, dur, render_secs, false))
             })
             .buffer_unordered(max_parallel)
             .collect()
@@ -646,10 +835,32 @@ pub async fn render_project(
         let mut scene_durs: Vec<f64> = vec![0.0; scenes.len()];
         let mut scene_render_times: Vec<f64> = vec![0.0; scenes.len()];
         for result in scene_results {
-            let (i, path, dur, render_secs) = result?;
+            let (i, path, dur, render_secs, was_cached) = result?;
             scene_files[i] = path;
             scene_durs[i] = dur;
             scene_render_times[i] = render_secs;
+
+            // Scene-level progress output
+            let scene_name = scenes[i].source_path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown");
+            if was_cached {
+                eprintln!(
+                    "  Scene {} ({}): cached \u{2713}",
+                    i + 1,
+                    scene_name,
+                );
+            } else {
+                let total_frames = Scene::total_frames_for_duration(dur, fps);
+                eprintln!(
+                    "  Scene {} ({}): rendered \u{2713} ({:.1}s, {} frames, {:.1}s)",
+                    i + 1,
+                    scene_name,
+                    dur,
+                    total_frames,
+                    render_secs,
+                );
+            }
 
             // Progress: scene captured
             let done = scenes.len() as f64 + (fmt_idx * steps_per_format + i + 1) as f64;

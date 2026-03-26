@@ -53,7 +53,7 @@ pub fn synthesize_cached_with_options(
 }
 
 /// Compute a deterministic cache key from all inputs that affect audio content.
-fn cache_key(engine_name: &str, voice: Option<&str>, speed: f32, text: &str) -> String {
+pub fn cache_key(engine_name: &str, voice: Option<&str>, speed: f32, text: &str) -> String {
     let voice_str = voice.unwrap_or("");
     let input = format!("{engine_name}\0{voice_str}\0{speed}\0{text}");
     let digest = Sha256::digest(input.as_bytes());
@@ -70,7 +70,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 /// Read duration from a JSON sidecar file. Returns `None` on any error.
-fn read_sidecar(path: &Path) -> Option<f64> {
+pub fn read_sidecar(path: &Path) -> Option<f64> {
     let contents = std::fs::read_to_string(path).ok()?;
     let v: serde_json::Value = serde_json::from_str(&contents).ok()?;
     v.get("duration_secs")?.as_f64()

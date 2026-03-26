@@ -1,3 +1,4 @@
+use base64::Engine;
 use crate::commands;
 use crate::config;
 use crate::scene::{self, SceneDuration};
@@ -385,6 +386,59 @@ pub struct PreviewSceneParams {
     /// 0-based frame number to preview (default: 0)
     #[schemars(description = "0-based frame number to preview (default 0, first frame)")]
     pub frame: Option<u32>,
+    /// Animation progress 0.0-1.0. When provided, calculates the frame number from progress instead of using the frame parameter.
+    #[schemars(
+        description = "Animation progress 0.0-1.0. When set, overrides the frame parameter by calculating the frame from progress * total_frames."
+    )]
+    pub progress: Option<f32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ExportMediaParams {
+    /// Path to the project directory
+    #[schemars(description = "Path to the project directory")]
+    pub project_path: String,
+    /// 0-based scene index to export
+    #[schemars(description = "0-based scene index to export")]
+    pub scene_index: usize,
+    /// Export format: png, gif, webp
+    #[schemars(description = "Export format: png, gif, webp")]
+    pub format: String,
+    /// Animation progress 0.0-1.0 for PNG export (default 0.0)
+    #[schemars(description = "Animation progress 0.0-1.0 for PNG export (default 0.0)")]
+    pub progress: Option<f32>,
+    /// Duration in seconds for GIF/WebP export
+    #[schemars(description = "Duration in seconds for GIF/WebP export")]
+    pub duration: Option<f32>,
+    /// Output width for GIF/WebP export (height derived from aspect ratio)
+    #[schemars(description = "Output width in pixels for GIF/WebP export")]
+    pub width: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BatchOperation {
+    /// Tool name to execute
+    #[schemars(
+        description = "Tool name: create_project, get_project_status, add_scenes, update_scene, remove_scenes, reorder_scenes, set_project_config, list_voices"
+    )]
+    pub tool: String,
+    /// Parameters for the tool as a JSON object
+    #[schemars(description = "Parameters for the tool as a JSON object")]
+    pub params: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BatchParams {
+    /// Array of operations to execute sequentially
+    #[schemars(description = "Array of tool operations to execute sequentially")]
+    pub operations: Vec<BatchOperation>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetRenderProgressParams {
+    /// Path to the project directory
+    #[schemars(description = "Path to the project directory")]
+    pub project_path: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -657,16 +711,355 @@ impl McServer {
     }
 
     #[tool(
-        description = "Preview a scene by rendering a specific frame as a PNG screenshot. Returns base64-encoded PNG data."
+        description = "Preview a scene by rendering a specific frame as a PNG screenshot. Returns base64-encoded PNG data. Use `progress` (0.0-1.0) to preview at a specific animation point."
     )]
     async fn preview_scene(
         &self,
         Parameters(params): Parameters<PreviewSceneParams>,
     ) -> Result<CallToolResult, McpError> {
         let path = Path::new(&params.project_path);
-        let result = commands::scenes::preview_scene(path, params.scene_index, params.frame)
+
+        // If progress is provided, calculate frame from progress
+        let frame = if let Some(progress) = params.progress {
+            let progress = progress.clamp(0.0, 1.0);
+            let config = config::load_config(path).map_err(mc_err)?;
+            let scenes = scene::load_scenes(path).map_err(mc_err)?;
+            if params.scene_index >= scenes.len() {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "Scene index {} out of range (project has {} scenes)",
+                        params.scene_index,
+                        scenes.len()
+                    ),
+                    None,
+                ));
+            }
+            let total_frames = scenes[params.scene_index].total_frames(config.video.fps);
+            let frame = ((progress * total_frames as f32) as u32).min(total_frames.saturating_sub(1));
+            Some(frame)
+        } else {
+            params.frame
+        };
+
+        let result = commands::scenes::preview_scene(path, params.scene_index, frame)
             .await
             .map_err(mc_err)?;
+        let text = serde_json::to_string_pretty(&result).map_err(mc_err)?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    #[tool(
+        description = "Export a scene as PNG, GIF, or WebP. For PNG: returns base64-encoded image at the given progress point. For GIF/WebP: renders animated output and returns the file path and size."
+    )]
+    async fn export_media(
+        &self,
+        Parameters(params): Parameters<ExportMediaParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let path = Path::new(&params.project_path);
+        let format = match params.format.to_lowercase().as_str() {
+            "png" => commands::export::ExportFormat::Png,
+            "gif" => commands::export::ExportFormat::Gif,
+            "webp" => commands::export::ExportFormat::Webp,
+            other => {
+                return Err(McpError::invalid_params(
+                    format!("Unsupported format: {other}. Use png, gif, or webp."),
+                    None,
+                ))
+            }
+        };
+
+        match format {
+            commands::export::ExportFormat::Png => {
+                // For PNG, render a single frame using the same pattern as preview_scene
+                let progress = params.progress.unwrap_or(0.0).clamp(0.0, 1.0);
+                let config = config::load_config(path).map_err(mc_err)?;
+                let scenes = scene::load_scenes(path).map_err(mc_err)?;
+                if params.scene_index >= scenes.len() {
+                    return Err(McpError::invalid_params(
+                        format!(
+                            "Scene index {} out of range (project has {} scenes)",
+                            params.scene_index,
+                            scenes.len()
+                        ),
+                        None,
+                    ));
+                }
+                let scene = &scenes[params.scene_index];
+                let width = config.video.width;
+                let height = config.video.height;
+                let total_frames = scene.total_frames(config.video.fps);
+                let frame =
+                    ((progress * total_frames as f32) as u32).min(total_frames.saturating_sub(1));
+
+                let mut registry = crate::template::TemplateRegistry::new().map_err(mc_err)?;
+                registry
+                    .register_project_templates(path)
+                    .map_err(mc_err)?;
+                let html = registry
+                    .render_scene_html(
+                        scene,
+                        &config.theme,
+                        width,
+                        height,
+                        frame,
+                        total_frames,
+                        Some(path),
+                    )
+                    .map_err(mc_err)?;
+
+                let screenshot =
+                    crate::render::browser::capture_single_frame(&html, width, height, frame, total_frames)
+                        .await
+                        .map_err(mc_err)?;
+                let png_base64 =
+                    base64::engine::general_purpose::STANDARD.encode(&screenshot);
+
+                let result = serde_json::json!({
+                    "format": "png",
+                    "scene_index": params.scene_index,
+                    "width": width,
+                    "height": height,
+                    "frame": frame,
+                    "progress": progress,
+                    "png_base64": png_base64,
+                });
+                let text = serde_json::to_string_pretty(&result).map_err(mc_err)?;
+                Ok(CallToolResult::success(vec![Content::text(text)]))
+            }
+            _ => {
+                // For GIF/WebP, call the export command and return the output path
+                let config = config::load_config(path).map_err(mc_err)?;
+                let output_rel = config
+                    .output
+                    .directory
+                    .strip_prefix("./")
+                    .unwrap_or(&config.output.directory);
+                let output_dir = path.join(output_rel);
+                let ext = format.extension();
+                let output_path =
+                    output_dir.join(format!("scene-{}.{}", params.scene_index, ext));
+
+                commands::export::run(
+                    path,
+                    format,
+                    Some(params.scene_index),
+                    0,                    // frame (unused for GIF/WebP)
+                    None,                 // progress (unused for animated)
+                    params.duration,
+                    Some(output_path.clone()),
+                    false,                // all
+                    params.width,
+                    false,                // open
+                    false,                // combined
+                    false,                // smart
+                )
+                .await
+                .map_err(mc_err)?;
+
+                let file_size = std::fs::metadata(&output_path)
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+
+                let result = serde_json::json!({
+                    "format": ext,
+                    "scene_index": params.scene_index,
+                    "output_path": output_path.display().to_string(),
+                    "file_size_bytes": file_size,
+                });
+                let text = serde_json::to_string_pretty(&result).map_err(mc_err)?;
+                Ok(CallToolResult::success(vec![Content::text(text)]))
+            }
+        }
+    }
+
+    #[tool(
+        description = "Execute multiple tool operations in a single call. Supported tools: create_project, get_project_status, add_scenes, update_scene, remove_scenes, reorder_scenes, set_project_config, list_voices. Returns an array of results."
+    )]
+    async fn batch(
+        &self,
+        Parameters(params): Parameters<BatchParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let mut results = Vec::new();
+
+        for op in params.operations {
+            let result: Result<serde_json::Value, String> = (|| -> Result<serde_json::Value, String> {
+                match op.tool.as_str() {
+                "create_project" => {
+                    let p: CreateProjectParams =
+                        serde_json::from_value(op.params).map_err(|e| e.to_string())?;
+                    let scenes = p.scenes.map(|scenes| {
+                        scenes
+                            .into_iter()
+                            .map(|s| commands::init::SceneInput {
+                                template: s.template,
+                                script: s.script,
+                                duration: s.duration,
+                                props: s.props,
+                                transition: s.transition,
+                                voice: s.voice,
+                                background: s.background,
+                            })
+                            .collect()
+                    });
+                    let theme = p.theme.map(|t| commands::init::ThemeOverrides {
+                        primary: t.primary,
+                        secondary: t.secondary,
+                        background: t.background,
+                        text: t.text,
+                        font_heading: t.font_heading,
+                        font_body: t.font_body,
+                    });
+                    let opts = commands::init::CreateProjectOptions {
+                        path: p.path.into(),
+                        name: Some(p.name),
+                        fps: p.fps,
+                        width: p.width,
+                        height: p.height,
+                        quality: p.quality,
+                        voice: p.voice,
+                        formats: p.formats,
+                        theme,
+                        scenes,
+                    };
+                    commands::init::create_project(&opts)
+                        .map(|r| serde_json::to_value(r).unwrap_or_default())
+                        .map_err(|e| e.to_string())
+                }
+                "get_project_status" => {
+                    let p: GetProjectStatusParams =
+                        serde_json::from_value(op.params).map_err(|e| e.to_string())?;
+                    build_project_status_json(Path::new(&p.project_path))
+                        .map_err(|e| e.message.to_string())
+                }
+                "add_scenes" => {
+                    let p: AddScenesParams =
+                        serde_json::from_value(op.params).map_err(|e| e.to_string())?;
+                    let scenes = p
+                        .scenes
+                        .into_iter()
+                        .map(|s| commands::scenes::SceneInput {
+                            template: s.template,
+                            script: s.script,
+                            duration: s.duration,
+                            props: s.props,
+                            transition: s.transition,
+                            voice: s.voice,
+                            background: s.background,
+                        })
+                        .collect();
+                    commands::scenes::add_scenes(Path::new(&p.project_path), p.insert_at, scenes)
+                        .map(|r| serde_json::to_value(r).unwrap_or_default())
+                        .map_err(|e| e.to_string())
+                }
+                "update_scene" => {
+                    let p: UpdateSceneParams =
+                        serde_json::from_value(op.params).map_err(|e| e.to_string())?;
+                    let update = commands::scenes::SceneUpdate {
+                        template: p.template,
+                        script: p.script,
+                        duration: p.duration,
+                        props: p.props,
+                        transition_in: p.transition_in,
+                        transition_out: p.transition_out,
+                        voice: p.voice,
+                    };
+                    commands::scenes::update_scene(
+                        Path::new(&p.project_path),
+                        p.scene_index,
+                        update,
+                    )
+                    .map(|r| serde_json::to_value(r).unwrap_or_default())
+                    .map_err(|e| e.to_string())
+                }
+                "remove_scenes" => {
+                    let p: RemoveScenesParams =
+                        serde_json::from_value(op.params).map_err(|e| e.to_string())?;
+                    commands::scenes::remove_scenes(Path::new(&p.project_path), &p.indices)
+                        .map(|r| serde_json::to_value(r).unwrap_or_default())
+                        .map_err(|e| e.to_string())
+                }
+                "reorder_scenes" => {
+                    let p: ReorderScenesParams =
+                        serde_json::from_value(op.params).map_err(|e| e.to_string())?;
+                    commands::scenes::reorder_scenes(Path::new(&p.project_path), &p.order)
+                        .map(|r| serde_json::to_value(r).unwrap_or_default())
+                        .map_err(|e| e.to_string())
+                }
+                "set_project_config" => {
+                    let p: SetProjectConfigParams =
+                        serde_json::from_value(op.params).map_err(|e| e.to_string())?;
+                    let update = config::ConfigUpdate {
+                        fps: p.fps,
+                        width: p.width,
+                        height: p.height,
+                        quality: p.quality,
+                        primary: p.primary,
+                        secondary: p.secondary,
+                        background: p.background,
+                        text: p.text,
+                        font_heading: p.font_heading,
+                        font_body: p.font_body,
+                        default_transition: p.default_transition,
+                        default_transition_duration: p.default_transition_duration,
+                        voice_engine: p.voice_engine,
+                        default_voice: p.default_voice,
+                        voice_speed: p.voice_speed,
+                        padding_before: p.padding_before,
+                        padding_after: p.padding_after,
+                        auto_fallback_duration: p.auto_fallback_duration,
+                        formats: None,
+                    };
+                    config::update_config(Path::new(&p.project_path), &update)
+                        .map(|r| serde_json::to_value(r).unwrap_or_default())
+                        .map_err(|e| e.to_string())
+                }
+                "list_voices" => {
+                    let voices = commands::scenes::list_voices();
+                    Ok(serde_json::to_value(voices).unwrap_or_default())
+                }
+                other => Err(format!(
+                    "Unknown tool: {other}. Supported: create_project, get_project_status, \
+                     add_scenes, update_scene, remove_scenes, reorder_scenes, \
+                     set_project_config, list_voices"
+                )),
+            }
+            })();
+
+            results.push(match result {
+                Ok(value) => serde_json::json!({ "status": "ok", "result": value }),
+                Err(err) => serde_json::json!({ "status": "error", "error": err }),
+            });
+        }
+
+        let text = serde_json::to_string_pretty(&results).map_err(mc_err)?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    #[tool(
+        description = "Poll render progress for a project. Returns the contents of .vidgen-progress.json from the output directory, or {\"status\": \"idle\"} if no render is in progress."
+    )]
+    async fn get_render_progress(
+        &self,
+        Parameters(params): Parameters<GetRenderProgressParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let path = Path::new(&params.project_path);
+        let config = config::load_config(path).map_err(mc_err)?;
+        let output_rel = config
+            .output
+            .directory
+            .strip_prefix("./")
+            .unwrap_or(&config.output.directory);
+        let progress_file = path.join(output_rel).join(".vidgen-progress.json");
+
+        let result = if progress_file.exists() {
+            let content = std::fs::read_to_string(&progress_file).map_err(mc_err)?;
+            serde_json::from_str::<serde_json::Value>(&content).unwrap_or_else(|_| {
+                serde_json::json!({ "status": "error", "message": "Invalid progress JSON" })
+            })
+        } else {
+            serde_json::json!({ "status": "idle" })
+        };
+
         let text = serde_json::to_string_pretty(&result).map_err(mc_err)?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
@@ -786,7 +1179,7 @@ impl ServerHandler for McServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some(
-                "vidgen — AI-agent-first video production. 10 tools available: \
+                "vidgen — AI-agent-first video production. 13 tools available: \
                  create_project (create new project with inline scenes), \
                  render (render project to MP4), \
                  get_project_status (inspect project config/scenes/output), \
@@ -796,7 +1189,10 @@ impl ServerHandler for McServer {
                  reorder_scenes (rearrange scene order), \
                  set_project_config (update video/theme/quality/voice settings), \
                  list_voices (available TTS voices), \
-                 preview_scene (render frame 0 as PNG). \
+                 preview_scene (render frame as PNG, supports progress 0.0-1.0), \
+                 export_media (export scene as PNG/GIF/WebP), \
+                 batch (execute multiple tool operations in one call), \
+                 get_render_progress (poll render progress). \
                  Typical workflow: create_project → add/update scenes → preview_scene → render. \
                  Duration: scenes default to \"auto\" — length derived from TTS audio + padding."
                     .into(),
